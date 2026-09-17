@@ -1,0 +1,11 @@
+{
+  "libmpv": {
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260903/mpv-dev-x86_64-20260903-git-69e63f425a.7z",
+    "release": "20260903",
+    "license": "GPL-2.0-or-later (build links GPL FFmpeg)"
+  },
+  "ffmpeg": {
+    "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+    "license": "GPL-3.0-or-later (gyan.dev build; includes libx264)"
+  }
+}

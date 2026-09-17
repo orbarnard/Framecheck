@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+
+# Downloaded binaries (fetched by tools/fetch_binaries.py, never committed)
+vendor/ffmpeg/
+vendor/playback/
+vendor/**/*.exe
+vendor/**/*.dll
+vendor/**/*.7z
+vendor/**/*.zip
+# vendor/PROVENANCE.json IS committed - it records what was downloaded.
+
+# Build output (build/framecheck.spec IS committed - it is the build recipe)
+build/build/
+dist/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# Generated test media. Reproduce with: python tools/make_fixtures.py
+tests/fixtures/

@@ -1,0 +1,120 @@
+{
+  "id": "x",
+  "name": "X (Twitter)",
+  "category": "social",
+  "description": "X promoted video: 1:1 recommended at 1200x1200, with 16:9 and 9:16 also supported.",
+  "filename_tag": "X",
+  "notes": [
+    "1:1 is the recommended shape for the timeline; 16:9 and 9:16 are accepted.",
+    "600x600 is the minimum in any accepted aspect ratio."
+  ],
+  "requirements": {
+    "container": {
+      "equals": "mp4",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.codec": {
+      "equals": "h264",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.width": {
+      "min": 600,
+      "preferred": 1200,
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.height": {
+      "min": 600,
+      "preferred": 1200,
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.aspect_ratio": {
+      "allowed": [
+        "1:1",
+        "16:9",
+        "9:16"
+      ],
+      "severity": "fail",
+      "fixable": false
+    },
+    "video.frame_rate": {
+      "max": 60,
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.scan_type": {
+      "equals": "progressive",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.pixel_format": {
+      "equals": "yuv420p",
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.codec": {
+      "equals": "aac",
+      "severity": "fail",
+      "fixable": true
+    },
+    "audio.channels": {
+      "equals": 2,
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.sample_rate_hz": {
+      "preferred": 48000,
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.bitrate_kbps": {
+      "min": 128,
+      "preferred": 192,
+      "severity": "warning",
+      "fixable": true
+    },
+    "file.size_mb": {
+      "max": 512,
+      "severity": "warning",
+      "fixable": true
+    },
+    "review.sound_off": {
+      "manual": true,
+      "label": "Sound-off legibility",
+      "guidance": "X autoplays muted in the timeline. Confirm the message reads without audio."
+    }
+  },
+  "target": {
+    "container": "mp4",
+    "output_extension": ".mp4",
+    "video_codec": "h264",
+    "video_profile": "high",
+    "pixel_format": "yuv420p",
+    "width": 1200,
+    "height": 1200,
+    "aspect_ratio": "1:1",
+    "frame_rate_behavior": "preserve_native_if_allowed",
+    "allowed_frame_rates": [
+      23.976,
+      24,
+      25,
+      29.97,
+      30,
+      60
+    ],
+    "preferred_frame_rate": 30,
+    "constant_frame_rate": true,
+    "video_bitrate_mbps": 8,
+    "video_bitrate_max_mbps": 12,
+    "audio": {
+      "codec": "aac",
+      "channels": 2,
+      "sample_rate_hz": 48000,
+      "bitrate_kbps": 192
+    },
+    "faststart": true
+  }
+}

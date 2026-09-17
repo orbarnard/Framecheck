@@ -1,0 +1,109 @@
+{
+  "id": "meta_reels",
+  "name": "Meta Reels",
+  "category": "social",
+  "description": "Facebook and Instagram Reels: full-screen 9:16 vertical, 1080x1920.",
+  "filename_tag": "META-REELS",
+  "source_url": "https://www.facebook.com/business/ads-guide/video",
+  "notes": [
+    "Reels plays edge to edge, so the UI covers a substantial band at the bottom of the frame.",
+    "A 16:9 master padded into 9:16 wastes most of the screen: shoot or recompose vertical."
+  ],
+  "requirements": {
+    "container": {
+      "equals": "mp4",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.codec": {
+      "equals": "h264",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.resolution": {
+      "equals": "1080x1920",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.aspect_ratio": {
+      "equals": "9:16",
+      "severity": "fail",
+      "fixable": false
+    },
+    "video.frame_rate": {
+      "max": 30,
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.scan_type": {
+      "equals": "progressive",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.pixel_format": {
+      "equals": "yuv420p",
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.codec": {
+      "equals": "aac",
+      "severity": "fail",
+      "fixable": true
+    },
+    "audio.channels": {
+      "equals": 2,
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.sample_rate_hz": {
+      "preferred": 48000,
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.bitrate_kbps": {
+      "min": 128,
+      "preferred": 192,
+      "severity": "warning",
+      "fixable": true
+    },
+    "review.safe_zones": {
+      "manual": true,
+      "label": "Text and logo safe zones",
+      "guidance": "Confirm nothing important falls under the Reels UI: roughly the top 14% and bottom 20% of the frame."
+    },
+    "review.sound_off": {
+      "manual": true,
+      "label": "Sound-off legibility",
+      "guidance": "Confirm the message reads with the sound muted."
+    }
+  },
+  "target": {
+    "container": "mp4",
+    "output_extension": ".mp4",
+    "video_codec": "h264",
+    "video_profile": "high",
+    "pixel_format": "yuv420p",
+    "width": 1080,
+    "height": 1920,
+    "aspect_ratio": "9:16",
+    "frame_rate_behavior": "preserve_native_if_allowed",
+    "allowed_frame_rates": [
+      23.976,
+      24,
+      25,
+      29.97,
+      30
+    ],
+    "preferred_frame_rate": 30,
+    "constant_frame_rate": true,
+    "video_bitrate_mbps": 8,
+    "video_bitrate_max_mbps": 12,
+    "audio": {
+      "codec": "aac",
+      "channels": 2,
+      "sample_rate_hz": 48000,
+      "bitrate_kbps": 192
+    },
+    "faststart": true
+  }
+}

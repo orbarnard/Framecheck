@@ -1,0 +1,107 @@
+{
+  "id": "youtube",
+  "name": "YouTube",
+  "category": "video",
+  "description": "YouTube upload and video ads: native aspect, native frame rate, 1080p preferred.",
+  "filename_tag": "YT",
+  "source_url": "https://support.google.com/youtube/answer/1722171",
+  "notes": [
+    "YouTube re-encodes everything, so upload the highest quality master you have rather than pre-compressing to a bitrate.",
+    "Frame rate is preserved on upload: do not convert. Deliver at the rate the material was shot at.",
+    "Common ad durations are :06 (bumper), :15, :30 and :60. Bumpers must be 6 seconds or less."
+  ],
+  "requirements": {
+    "container": {
+      "equals": "mp4",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.codec": {
+      "equals": "h264",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.height": {
+      "min": 720,
+      "preferred": 1080,
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.frame_rate": {
+      "allowed": [
+        23.976,
+        24,
+        25,
+        29.97,
+        30,
+        50,
+        60
+      ],
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.scan_type": {
+      "equals": "progressive",
+      "severity": "fail",
+      "fixable": true
+    },
+    "video.pixel_format": {
+      "equals": "yuv420p",
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.codec": {
+      "equals": "aac",
+      "severity": "fail",
+      "fixable": true
+    },
+    "audio.sample_rate_hz": {
+      "preferred": 48000,
+      "severity": "warning",
+      "fixable": true
+    },
+    "audio.bitrate_kbps": {
+      "min": 128,
+      "preferred": 384,
+      "severity": "warning",
+      "fixable": true
+    },
+    "review.captions": {
+      "manual": true,
+      "label": "Captions",
+      "guidance": "Confirm captions or a subtitle file are supplied where the campaign requires them."
+    },
+    "review.end_card": {
+      "manual": true,
+      "label": "End card and branding",
+      "guidance": "Confirm the end card, logo and any call to action are correct and legible at mobile size."
+    }
+  },
+  "target": {
+    "container": "mp4",
+    "output_extension": ".mp4",
+    "video_codec": "h264",
+    "video_profile": "high",
+    "pixel_format": "yuv420p",
+    "frame_rate_behavior": "preserve_native_if_allowed",
+    "allowed_frame_rates": [
+      23.976,
+      24,
+      25,
+      29.97,
+      30,
+      50,
+      60
+    ],
+    "constant_frame_rate": true,
+    "video_bitrate_mbps": 16,
+    "video_bitrate_max_mbps": 24,
+    "audio": {
+      "codec": "aac",
+      "channels": 2,
+      "sample_rate_hz": 48000,
+      "bitrate_kbps": 384
+    },
+    "faststart": true
+  }
+}
