@@ -1,0 +1,34 @@
+Framecheck is installed.
+
+Find it in the Start menu, or pin it to your taskbar: press Start, type
+"Framecheck", then right-click it and choose "Pin to taskbar".
+
+Getting started
+---------------
+
+  1. Open File, or Open Folder, or drag a file onto the window.
+  2. Go to the VALIDATE tab and tick a destination (Streaming / CTV, YouTube,
+     Meta, and so on).
+  3. CONFORM shows exactly what will change before anything happens.
+  4. EXPORT writes the new file, then re-reads it from disk and validates it
+     again.
+
+Your source files are never modified. Every export is a new file, named
+FC_<DESTINATION>-<original name> so you can tell at a glance what it is and
+where it is going.
+
+Everything runs on this machine. Nothing is uploaded anywhere.
+
+Custom delivery specs
+---------------------
+
+Delivery profiles are plain JSON files in the "specs" folder inside the
+installation directory. Edit one, or add your own destination, then use
+Help > Reload Profiles. No rebuild required.
+
+Licence
+-------
+
+GPL-3.0-or-later. Framecheck bundles FFmpeg and libmpv (GPL) and Qt/PySide6
+(LGPL-3.0). See THIRD_PARTY_NOTICES.md and the "licenses" folder in the
+installation directory.

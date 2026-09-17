@@ -1,6 +1,6 @@
 """Build the distributable Windows package.
 
-    python tools/build_exe.py [--zip] [--clean]
+    python tools/build_exe.py [--zip] [--installer] [--clean]
 
 Produces `dist/Framecheck/` (PyInstaller onedir -- see build/framecheck.spec for
 why it must not be onefile) and, with --zip, `dist/Framecheck-0.1.0-win64.zip`
@@ -60,6 +60,11 @@ def check_prerequisites() -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the Framecheck Windows package.")
     parser.add_argument("--zip", action="store_true", help="also produce the release zip")
+    parser.add_argument(
+        "--installer",
+        action="store_true",
+        help="also produce FramecheckSetup-<version>.exe (needs Inno Setup 6)",
+    )
     parser.add_argument("--clean", action="store_true", help="discard cached build state first")
     args = parser.parse_args(argv)
 
@@ -91,6 +96,50 @@ def main(argv: list[str] | None = None) -> int:
         path = shutil.make_archive(str(archive), "zip", root_dir=DIST, base_dir=OUT.name)
         print(f"Zip:   {path} ({human(Path(path).stat().st_size)})")
 
+    if args.installer:
+        return build_installer()
+
+    return 0
+
+
+def find_iscc() -> Path | None:
+    """Locate the Inno Setup compiler.
+
+    winget installs it per-user under Local\\Programs, not into Program Files,
+    so check both.
+    """
+    candidates = [
+        Path.home() / "AppData/Local/Programs/Inno Setup 6/ISCC.exe",
+        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    found = shutil.which("ISCC")
+    return Path(found) if found else None
+
+
+def build_installer() -> int:
+    """Compile the single-file installer from the onedir build."""
+    iscc = find_iscc()
+    if iscc is None:
+        print(
+            "\nInno Setup 6 not found. Install it with:\n"
+            "    winget install JRSoftware.InnoSetup\n"
+            "or from https://jrsoftware.org/isdl.php",
+            file=sys.stderr,
+        )
+        return 1
+
+    script = ROOT / "build" / "framecheck.iss"
+    result = subprocess.run([str(iscc), str(script)], cwd=ROOT)
+    if result.returncode != 0:
+        return result.returncode
+
+    setup = DIST / f"FramecheckSetup-{VERSION}.exe"
+    if setup.is_file():
+        print(f"Setup: {setup} ({human(setup.stat().st_size)})")
     return 0
 
 
