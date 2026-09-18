@@ -29,6 +29,7 @@ from fractions import Fraction
 from ..models.export_job import ExportJob, LoudnessResult
 from ..models.media_info import MediaInfo
 from ..models.profile import AudioTarget, FrameRateBehavior, TargetSpec
+from ..models.trim import ExactCut, Fit
 
 # Broadcast loudness specs (ATSC A/85, EBU R128) quote an LRA ceiling rather
 # than a value to hit; 7 LU is the common delivery figure and is what loudnorm
@@ -123,6 +124,50 @@ def build_video_filters(info: MediaInfo, target: TargetSpec) -> list[str]:
     ]
 
 
+def build_exact_cut_filters(cut: ExactCut) -> list[str]:
+    """Re-time the source frames onto the whole-rate grid and fill the slot.
+
+    `trim` keeps exactly the source frames (when holding, the input `-t` is
+    sized to the audio and lets one more through), `setpts` lays them one per
+    output frame, and `tpad` repeats the edge frame. Nothing is duplicated or
+    dropped anywhere but that edge.
+    """
+    if cut.fit is Fit.CONVERT:
+        return []  # the rate conversion makes the frames
+    filters = [
+        f"trim=end_frame={cut.source_frames}",
+        f"setpts=N/{cut.rate.value.numerator}/TB",
+    ]
+    if cut.held_frames:
+        edge = "start" if cut.fit is Fit.HOLD_START else "stop"  # tpad's names
+        filters.append(f"tpad={edge}={cut.held_frames}:{edge}_mode=clone")
+    return filters
+
+
+def build_audio_speed_filter(speed: Fraction, sample_rate_hz: int) -> str:
+    """Play the audio `speed` times faster, matching the re-timed picture.
+
+    A sample-rate relabel, the way an edit suite does a 0.1 % pull-up: no
+    time-stretch artefacts, and pitch rises 1.7 cents, far below audibility.
+    Falls back to pitch-preserving atempo when the relabelled rate would not be
+    a whole number of samples.
+    """
+    relabelled = sample_rate_hz * speed
+    if relabelled.denominator == 1:
+        return f"aresample={sample_rate_hz},asetrate={relabelled.numerator}"
+    return f"atempo={float(speed):.6f}"
+
+
+def build_audio_clip_filter(seconds: Fraction, sample_rate_hz: int) -> str:
+    """Cut (or silence-pad) the audio to exactly the picture length.
+
+    Sample-exact, after resampling so the count is in delivery samples. Without
+    it an audio tail past the last frame sets the container duration.
+    """
+    samples = int(seconds * sample_rate_hz + Fraction(1, 2))
+    return f"aresample={sample_rate_hz},apad,atrim=end_sample={samples}"
+
+
 def _finite(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
@@ -176,12 +221,17 @@ def build_export_args(job: ExportJob) -> list[str]:
     args.append("-y" if job.overwrite else "-n")
 
     trim = job.trim if job.is_trimmed else None
+    cut = job.exact_cut
     if trim is not None and trim.in_point.frames > 0:
         args += ["-accurate_seek", "-ss", format_seconds(trim.in_point.seconds)]
 
     args += ["-i", str(job.source_path)]
 
-    if trim is not None:
+    if cut is not None:
+        # Sped up: exactly the source frames' time. Holding: the full slot of
+        # real audio, and the video filter takes only its frames from it.
+        args += ["-t", format_seconds(cut.source_seconds)]
+    elif trim is not None:
         args += ["-t", format_seconds(trim.duration_seconds)]
 
     # Only the first video and first audio stream travel. A multi-track master
@@ -191,6 +241,8 @@ def build_export_args(job: ExportJob) -> list[str]:
         args += ["-map", "0:a:0?"]
 
     filters = build_video_filters(info, target)
+    if cut is not None:
+        filters = build_exact_cut_filters(cut) + filters
     if filters:
         args += ["-vf", ",".join(filters)]
 
@@ -210,7 +262,7 @@ def build_export_args(job: ExportJob) -> list[str]:
     else:
         args += ["-crf", "18"]
 
-    rate = resolve_frame_rate(info, target)
+    rate = cut.rate.value if cut is not None else resolve_frame_rate(info, target)
     if rate is not None:
         if target.constant_frame_rate:
             # Duplicate/drop only. minterpolate invents frames that were never
@@ -225,10 +277,19 @@ def build_export_args(job: ExportJob) -> list[str]:
         args.append("-an")
     else:
         audio = target.audio
+        audio_filters: list[str] = []
         if job.normalize_loudness:
             loudnorm = build_loudnorm_filter(audio, job.source_loudness)
             if loudnorm:
-                args += ["-af", loudnorm]
+                audio_filters.append(loudnorm)
+        if cut is not None and cut.speed != 1:
+            audio_filters.append(build_audio_speed_filter(cut.speed, audio.sample_rate_hz))
+        if job.picture_seconds:
+            audio_filters.append(
+                build_audio_clip_filter(job.picture_seconds, audio.sample_rate_hz)
+            )
+        if audio_filters:
+            args += ["-af", ",".join(audio_filters)]
         args += ["-c:a", audio.codec]
         args += ["-ac", str(audio.channels)]
         args += ["-ar", str(audio.sample_rate_hz)]

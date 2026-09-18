@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .media_info import MediaInfo
 from .profile import Profile, TargetSpec
-from .trim import TrimRange
+from .trim import ExactCut, TrimRange
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,9 @@ class ExportJob:
     # Also-satisfied profiles when one master serves several destinations.
     additional_profiles: tuple[Profile, ...] = ()
     trim: TrimRange | None = None
+    # Set when the trim is an EXACT target the source rate cannot land: the
+    # export re-times onto `exact_cut.rate`, sped up or holding an edge frame.
+    exact_cut: ExactCut | None = None
     normalize_loudness: bool = False
     source_loudness: LoudnessResult | None = None
     actions: tuple[ConformAction, ...] = ()
@@ -82,15 +85,32 @@ class ExportJob:
 
     @property
     def expected_duration_seconds(self) -> Fraction | None:
+        if self.exact_cut is not None:
+            return self.exact_cut.seconds
         if self.trim is not None:
             return self.trim.duration_seconds
         return self.source_info.duration_seconds
 
     @property
     def expected_frame_count(self) -> int | None:
+        if self.exact_cut is not None:
+            return self.exact_cut.frames
         if self.trim is not None:
             return self.trim.frame_count
         return self.source_info.frame_count
+
+    @property
+    def picture_seconds(self) -> Fraction | None:
+        """Length of the output picture, which the audio is cut to match.
+
+        Untrimmed, this is the video stream's own duration rather than the
+        container's: the container reports the longer stream, and an audio
+        tail running past the last frame is exactly what turns a :15 into 15.02.
+        """
+        if self.exact_cut is not None or self.trim is not None:
+            return self.expected_duration_seconds
+        video = self.source_info.video
+        return video.duration_seconds if video else None
 
     def changes_picture_or_sound(self) -> tuple[ConformAction, ...]:
         return tuple(a for a in self.actions if a.affects_picture_or_sound)

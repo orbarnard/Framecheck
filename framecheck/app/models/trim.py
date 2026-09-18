@@ -18,6 +18,7 @@ starting at frame 0 with 900 frames has OUT at frame 900.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
@@ -31,7 +32,12 @@ STANDARD_TARGET_SECONDS: tuple[int, ...] = (6, 15, 30, 60, 90)
 class TargetMode(Enum):
     """What the user meant by a target duration."""
 
-    # The delivery default. The longest cut that does not EXCEED the target in
+    # The delivery default. Exactly the target in real seconds, which platforms
+    # enforcing a slot demand: 14.982 s gets flagged as a :14. Where the source
+    # rate cannot land it (29.97, 59.94, 23.976) the export moves to the whole
+    # rate -- see `ExactCut` and `Fit`.
+    EXACT = "exact"
+    # The longest cut that does not EXCEED the target in
     # real seconds. A platform that enforces a :30 slot measures wall-clock
     # seconds, so 30.030 s is rejected while 29.997 s is accepted -- being a
     # frame under is free, being a frame over fails ingest.
@@ -45,20 +51,77 @@ class TargetMode(Enum):
     WALL_CLOCK = "wall_clock"
 
 
+class Fit(Enum):
+    """How an EXACT cut fills a slot the source rate cannot land on.
+
+    At 29.97 a :15 is 449.55 frames, so no cut of source frames is 15.000 s.
+    Either way the export runs at the whole rate (30) and every source frame
+    is shown exactly once -- nothing is duplicated or dropped mid-spot.
+    """
+
+    # The default. 450 source frames (15.015 s) play 0.1 % faster, picture and
+    # sound together: exactly 15.000 s, in sync from first frame to last. The
+    # sound rises 1.7 cents, well under what anyone can hear.
+    SPEED = "speed"
+    # 449 source frames, re-timed, then the last (or first) frame repeated to
+    # fill. Audio keeps its speed, so picture drifts ahead of sound by up to
+    # 1 ms per second of cut.
+    HOLD_END = "hold_end"
+    HOLD_START = "hold_start"
+    # Not a user choice: the destination converts the rate anyway (59.94 ->
+    # 30), and its rate lands the slot. The source is cut at exactly the target
+    # in real time and the conversion makes the frames; nothing is sped up.
+    CONVERT = "convert"
+
+
+@dataclass(frozen=True)
+class ExactCut:
+    """An output of exactly the target length, on a rate that can hit it."""
+
+    source_rate: FrameRate
+    rate: FrameRate  # output rate
+    frames: int  # output frame count
+    source_frames: int  # source frames used, each exactly once
+    fit: Fit = Fit.SPEED
+
+    @property
+    def held_frames(self) -> int:
+        return self.frames - self.source_frames
+
+    @property
+    def seconds(self) -> Fraction:
+        return Fraction(self.frames) / self.rate.value
+
+    @property
+    def speed(self) -> Fraction:
+        """Playback speed-up factor: 1001/1000 from 29.97 to 30, 1 when holding."""
+        return self.rate.value / self.source_rate.value if self.fit is Fit.SPEED else Fraction(1)
+
+    @property
+    def source_seconds(self) -> Fraction:
+        """Real source time the output draws on: the frames when sped up, the
+        whole slot of audio when holding."""
+        if self.fit is Fit.SPEED:
+            return Fraction(self.source_frames) / self.source_rate.value
+        return self.seconds
+
+
 @dataclass(frozen=True)
 class TargetDuration:
     """A requested output duration, plus how it was meant."""
 
     seconds: Fraction
-    mode: TargetMode = TargetMode.AT_OR_UNDER
+    mode: TargetMode = TargetMode.EXACT
+    fit: Fit = Fit.SPEED  # EXACT only
 
     @classmethod
     def of(
         cls,
         seconds: float | int | Fraction,
-        mode: TargetMode = TargetMode.AT_OR_UNDER,
+        mode: TargetMode = TargetMode.EXACT,
+        fit: Fit = Fit.SPEED,
     ) -> "TargetDuration":
-        return cls(Fraction(seconds).limit_denominator(1_000_000), mode)
+        return cls(Fraction(seconds).limit_denominator(1_000_000), mode, fit)
 
     def frames_at(self, rate: FrameRate) -> int:
         """Frame count this target resolves to at `rate`.
@@ -72,11 +135,17 @@ class TargetDuration:
         which runs 30.030 s.
 
         WALL_CLOCK rounds to the nearest frame, which may land just over.
+
+        EXACT counts *source* frames, as `exact_cut` decides; where no exact cut
+        exists it floors like AT_OR_UNDER.
         """
+        cut = self.exact_cut(rate)
+        if cut is not None:
+            return cut.source_frames
         if self.mode is TargetMode.TIMECODE:
             return int(self.seconds * rate.nominal)
         rounding = (
-            Rounding.FLOOR if self.mode is TargetMode.AT_OR_UNDER else Rounding.NEAREST
+            Rounding.NEAREST if self.mode is TargetMode.WALL_CLOCK else Rounding.FLOOR
         )
         frames = MediaTime.from_seconds(self.seconds, rate, rounding).frames
         # Never floor a positive target down to nothing on an absurd rate.
@@ -89,6 +158,22 @@ class TargetDuration:
         """
         exact = self.seconds * rate.value
         return exact.denominator == 1
+
+    def exact_cut(self, rate: FrameRate) -> ExactCut | None:
+        """How an EXACT target is delivered from a source at `rate`.
+
+        None when no re-time is needed (the target is already a frame boundary),
+        when the mode is not EXACT, or when the whole rate cannot land it either.
+        """
+        if self.mode is not TargetMode.EXACT or self.is_frame_aligned(rate):
+            return None
+        out = FrameRate(Fraction(rate.nominal))
+        frames = self.seconds * out.value
+        under = math.floor(self.seconds * rate.value)
+        if frames.denominator != 1 or under > frames:
+            return None
+        source_frames = int(frames) if self.fit is Fit.SPEED else under
+        return ExactCut(rate, out, int(frames), source_frames, self.fit)
 
     def alignment_error(self, rate: FrameRate) -> Fraction:
         """Signed seconds by which the achievable cut misses the request.

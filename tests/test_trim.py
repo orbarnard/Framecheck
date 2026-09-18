@@ -9,6 +9,8 @@ import pytest
 from framecheck.app.models.media_time import FrameRate, MediaTime
 from framecheck.app.models.trim import (
     STANDARD_TARGET_SECONDS,
+    ExactCut,
+    Fit,
     TargetDuration,
     TargetMode,
     TrimRange,
@@ -16,6 +18,7 @@ from framecheck.app.models.trim import (
 
 R_2997 = FrameRate(Fraction(30000, 1001))
 R_25 = FrameRate(Fraction(25, 1))
+UNDER = TargetMode.AT_OR_UNDER
 
 
 def at(frames: int, rate: FrameRate = R_2997) -> MediaTime:
@@ -62,13 +65,14 @@ def test_mixed_rates_are_rejected() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_thirty_seconds_at_2997_stays_under_thirty_by_default() -> None:
-    """The delivery default never overruns the slot.
+def test_thirty_seconds_at_2997_stays_under_thirty_at_or_under() -> None:
+    """AT_OR_UNDER (the fallback when a destination refuses the whole rate)
+    never overruns the slot.
 
     A platform policing a :30 measures wall-clock seconds, so 30.030 s is
     rejected while 29.997 s passes.
     """
-    trim = TrimRange.for_target(at(0), TargetDuration.of(30))
+    trim = TrimRange.for_target(at(0), TargetDuration.of(30, UNDER))
     assert trim.frame_count == 899
     assert trim.duration_seconds == Fraction(899 * 1001, 30000)
     assert float(trim.duration_seconds) == pytest.approx(29.9967, abs=1e-4)
@@ -97,14 +101,14 @@ def test_timecode_mode_still_gives_the_broadcast_900_frames() -> None:
 @pytest.mark.parametrize("seconds", STANDARD_TARGET_SECONDS)
 def test_no_standard_target_ever_runs_over_at_any_rate(rate: FrameRate, seconds: int) -> None:
     """The rule that keeps deliverables from bouncing: never a frame over."""
-    frames = TargetDuration.of(seconds).frames_at(rate)
+    frames = TargetDuration.of(seconds, UNDER).frames_at(rate)
     assert Fraction(frames) / rate.value <= seconds
     # ...and it must be the *longest* such cut, not an arbitrary short one.
     assert Fraction(frames + 1) / rate.value > seconds
 
 
 def test_for_target_starts_at_the_given_in_point() -> None:
-    trim = TrimRange.for_target(at(100), TargetDuration.of(6))
+    trim = TrimRange.for_target(at(100), TargetDuration.of(6, UNDER))
     assert trim.in_point.frames == 100
     assert trim.frame_count == 179  # 6 s at 29.97, floored to stay under
 
@@ -135,9 +139,9 @@ def test_one_frame_long_reports_one_frame_over() -> None:
     assert delta.describe() == "1 frame over :30"
 
 
-def test_the_delivery_default_calls_900_frames_one_over() -> None:
+def test_at_or_under_calls_900_frames_one_over() -> None:
     """900 frames runs 30.030 s, which the AT_OR_UNDER rule counts as over."""
-    delta = TrimRange(at(0), at(900)).compare_to_target(TargetDuration.of(30))
+    delta = TrimRange(at(0), at(900)).compare_to_target(TargetDuration.of(30, UNDER))
     assert delta.frames == 1
     assert delta.is_over
 
@@ -148,8 +152,9 @@ def test_an_exact_range_says_so() -> None:
         trim.compare_to_target(TargetDuration.of(30, TargetMode.TIMECODE)).describe()
         == "Exactly :30"
     )
-    # Under the delivery default the exact cut is 899 frames.
-    assert TrimRange(at(0), at(899)).compare_to_target(TargetDuration.of(30)).describe() == "Exactly :30"
+    # AT_OR_UNDER's cut is 899 frames; the sped-up default's is 900.
+    assert TrimRange(at(0), at(899)).compare_to_target(TargetDuration.of(30, UNDER)).describe() == "Exactly :30"
+    assert TrimRange(at(0), at(900)).compare_to_target(TargetDuration.of(30)).describe() == "Exactly :30"
 
 
 def test_short_ranges_report_frames_under() -> None:
@@ -343,3 +348,55 @@ def test_parsed_drop_frame_timecode_round_trips() -> None:
 )
 def test_parse_time_input_rejects_nonsense(text: str) -> None:
     assert _parser()(text, R_25) is None
+
+
+# --------------------------------------------------------------------------
+# EXACT: whole seconds on a 1000/1001 rate
+# --------------------------------------------------------------------------
+
+R_30 = FrameRate(Fraction(30))
+
+
+@pytest.mark.parametrize("seconds", STANDARD_TARGET_SECONDS)
+def test_exact_speed_uses_a_whole_slot_of_frames_and_holds_none(seconds) -> None:
+    cut = TargetDuration.of(seconds).exact_cut(R_2997)
+    assert cut == ExactCut(R_2997, R_30, seconds * 30, seconds * 30, Fit.SPEED)
+    assert cut.held_frames == 0
+    assert cut.seconds == seconds
+    assert cut.speed == Fraction(1001, 1000)
+    assert cut.source_seconds == Fraction(seconds * 1001, 1000)
+
+
+@pytest.mark.parametrize(
+    "seconds, source_frames, held",
+    [(6, 179, 1), (15, 449, 1), (30, 899, 1), (60, 1798, 2), (90, 2697, 3)],
+)
+def test_exact_hold_cuts_under_and_fills_at_the_edge(seconds, source_frames, held) -> None:
+    cut = TargetDuration.of(seconds, fit=Fit.HOLD_END).exact_cut(R_2997)
+    assert cut == ExactCut(R_2997, R_30, seconds * 30, source_frames, Fit.HOLD_END)
+    assert cut.held_frames == held
+    assert cut.speed == 1
+    assert cut.source_seconds == seconds  # the whole slot of real audio
+
+
+def test_exact_speed_is_the_preset_default() -> None:
+    target = TargetDuration.of(15)
+    assert (target.mode, target.fit) == (TargetMode.EXACT, Fit.SPEED)
+
+
+def test_exact_trims_the_source_frames_the_cut_uses() -> None:
+    assert TargetDuration.of(15).frames_at(R_2997) == 450
+    assert TargetDuration.of(15, fit=Fit.HOLD_START).frames_at(R_2997) == 449
+
+
+def test_exact_needs_no_retime_on_an_aligned_rate() -> None:
+    assert TargetDuration.of(15).exact_cut(R_25) is None
+    assert TargetDuration.of(15).frames_at(R_25) == 375
+
+
+def test_other_modes_never_retime() -> None:
+    assert TargetDuration.of(15, TargetMode.AT_OR_UNDER).exact_cut(R_2997) is None
+
+
+def test_exact_gives_up_when_the_whole_rate_cannot_land_it_either() -> None:
+    assert TargetDuration.of(Fraction(1, 7)).exact_cut(R_2997) is None

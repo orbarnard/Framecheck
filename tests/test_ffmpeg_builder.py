@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from framecheck.app.media.ffmpeg_builder import (
+    build_audio_speed_filter,
     build_command_text,
     build_export_args,
     build_loudnorm_filter,
@@ -24,7 +25,7 @@ from framecheck.app.models.export_job import ExportJob, LoudnessResult
 from framecheck.app.models.media_info import AudioStreamInfo, MediaInfo, VideoStreamInfo
 from framecheck.app.models.media_time import FrameRate, MediaTime
 from framecheck.app.models.profile import AudioTarget, FrameRateBehavior, TargetSpec
-from framecheck.app.models.trim import TrimRange
+from framecheck.app.models.trim import ExactCut, Fit, TargetDuration, TrimRange
 
 R2997 = FrameRate(Fraction(30000, 1001))
 R23976 = FrameRate(Fraction(24000, 1001))
@@ -374,3 +375,72 @@ def test_command_text_quotes_only_for_display():
     text = build_command_text(args)
     assert text.startswith("ffmpeg ")
     assert "-hide_banner" in text
+
+
+# --- exact duration --------------------------------------------------------
+
+R30 = FrameRate(Fraction(30))
+
+
+def exact_job(fit: Fit = Fit.SPEED, **kwargs) -> ExportJob:
+    info = make_info(rate=R2997, codec="h264")
+    cut = TargetDuration.of(15, fit=fit).exact_cut(R2997)
+    trim = TrimRange(MediaTime(30, R2997), MediaTime(30 + cut.source_frames, R2997))
+    return make_job(info, trim=trim, exact_cut=cut, **kwargs)
+
+
+def test_speed_fit_reads_the_source_frames_and_runs_at_the_whole_rate():
+    args = build_export_args(exact_job())
+    assert pair_after(args, "-t") == "15.015000"
+    assert pair_after(args, "-r") == "30/1"
+    assert pair_after(args, "-vf") == "trim=end_frame=450,setpts=N/30/TB"
+
+
+def test_speed_fit_speeds_the_audio_with_the_picture_then_cuts_it_exact():
+    af = pair_after(build_export_args(exact_job()), "-af")
+    assert af == (
+        "aresample=48000,asetrate=48048,"
+        "aresample=48000,apad,atrim=end_sample=720000"
+    )
+
+
+def test_speed_fit_audio_follows_loudnorm():
+    af = pair_after(build_export_args(exact_job(normalize_loudness=True)), "-af")
+    assert af.startswith("loudnorm=") and "asetrate=48048" in af
+
+
+def test_audio_speed_falls_back_to_atempo_off_a_whole_sample_rate():
+    assert build_audio_speed_filter(Fraction(1001, 1000), 44100) == "atempo=1.001000"
+
+
+def test_hold_fit_reads_the_whole_slot_and_repeats_the_last_frame():
+    args = build_export_args(exact_job(Fit.HOLD_END))
+    assert pair_after(args, "-t") == "15.000000"
+    assert pair_after(args, "-vf") == (
+        "trim=end_frame=449,setpts=N/30/TB,tpad=stop=1:stop_mode=clone"
+    )
+    assert "asetrate" not in pair_after(args, "-af")
+
+
+def test_hold_fit_can_repeat_the_first_frame_instead():
+    vf = pair_after(build_export_args(exact_job(Fit.HOLD_START)), "-vf")
+    assert vf.endswith("tpad=start=1:start_mode=clone")
+
+
+def test_untrimmed_audio_is_cut_to_the_video_stream_not_the_container():
+    base = make_info(rate=R2997, codec="h264", duration=Fraction(1502, 100))
+    video = VideoStreamInfo(**{**base.video.__dict__, "duration_seconds": Fraction(15)})
+    info = MediaInfo(**{**base.__dict__, "video": video})
+    af = pair_after(build_export_args(make_job(info)), "-af")
+    assert af.endswith("atrim=end_sample=720000")
+
+
+def test_convert_fit_cuts_real_time_and_leaves_the_frames_to_the_rate_change():
+    info = make_info(rate=FrameRate(Fraction(60000, 1001)), codec="h264")
+    cut = ExactCut(info.frame_rate, R30, 450, 450, Fit.CONVERT)
+    trim = TrimRange(MediaTime(0, info.frame_rate), MediaTime(900, info.frame_rate))
+    args = build_export_args(make_job(info, trim=trim, exact_cut=cut))
+    assert pair_after(args, "-t") == "15.000000"
+    assert pair_after(args, "-r") == "30/1"
+    assert "-vf" not in args
+    assert "asetrate" not in pair_after(args, "-af")

@@ -18,9 +18,10 @@ from pathlib import Path
 
 from ..models.export_job import ConformAction, ExportJob, LoudnessResult
 from ..models.media_info import MediaInfo
+from ..models.media_time import FrameRate
 from ..models.media_time import format_seconds as format_clock
 from ..models.profile import Profile, TargetSpec
-from ..models.trim import TrimRange
+from ..models.trim import ExactCut, Fit, TargetDuration, TargetMode, TrimRange
 from ..services.binaries import ffprobe_path, run_tool
 from ..utils.paths import OutputDestination, build_output_path
 from .ffmpeg_builder import needs_scaling, resolve_frame_rate
@@ -39,15 +40,60 @@ def plan_conform(
     trim: TrimRange | None = None,
     loudness: LoudnessResult | None = None,
     normalize: bool = False,
+    exact_cut: ExactCut | None = None,
 ) -> tuple[ConformAction, ...]:
     """Every change this export makes, and why."""
     actions: list[ConformAction] = []
     actions += _container_actions(info, target)
-    actions += _video_actions(info, target)
+    actions += _video_actions(
+        info, target, exact_cut is None or exact_cut.fit is Fit.CONVERT
+    )
     actions += _audio_actions(info, target)
     actions += _loudness_actions(info, target, loudness, normalize)
     actions += _trim_actions(info, trim)
+    actions += _exact_cut_actions(info, exact_cut)
     return tuple(actions)
+
+
+def resolve_exact_cut(
+    info: MediaInfo,
+    target: TargetSpec,
+    trim: TrimRange | None,
+    duration: TargetDuration | None,
+) -> tuple[ExactCut | None, TrimRange | None]:
+    """The exact cut this export can make, and the trim to make it from.
+
+    Only when the trim is still exactly the preset's source frames (a nudged
+    OUT is the user's cut, not the preset's). Then, in order:
+
+    * the destination keeps the source rate and accepts the whole rate: the
+      preset's cut as planned (sped up, or holding a frame);
+    * the destination converts the rate anyway (59.94 -> 30) to one that lands
+      the slot: cut exactly the target in real time and let the conversion
+      make the frames -- no speed change needed;
+    * otherwise the trim is cut back to the longest that fits: a frame under
+      is accepted, a frame over is not.
+    """
+    rate = info.frame_rate
+    if trim is None or duration is None or rate is None:
+        return None, trim
+    cut = duration.exact_cut(rate)
+    if cut is None or trim.frame_count != cut.source_frames:
+        return None, trim
+    resolved = resolve_frame_rate(info, target)
+    if resolved == rate.value and (
+        not target.allowed_frame_rates or cut.rate.value in target.allowed_frame_rates
+    ):
+        return cut, trim
+    if resolved is not None and resolved != rate.value:
+        frames = duration.seconds * resolved
+        if frames.denominator == 1:
+            converted = ExactCut(
+                rate, FrameRate(resolved), int(frames), int(frames), Fit.CONVERT
+            )
+            return converted, trim
+    under = TargetDuration(duration.seconds, TargetMode.AT_OR_UNDER).frames_at(rate)
+    return None, TrimRange(trim.in_point, trim.in_point.offset_frames(under))
 
 
 def _container_actions(info: MediaInfo, target: TargetSpec) -> list[ConformAction]:
@@ -67,7 +113,9 @@ def _container_actions(info: MediaInfo, target: TargetSpec) -> list[ConformActio
     ]
 
 
-def _video_actions(info: MediaInfo, target: TargetSpec) -> list[ConformAction]:
+def _video_actions(
+    info: MediaInfo, target: TargetSpec, include_rate: bool = True
+) -> list[ConformAction]:
     actions: list[ConformAction] = []
     video = info.video
     if video is None:
@@ -103,7 +151,8 @@ def _video_actions(info: MediaInfo, target: TargetSpec) -> list[ConformAction]:
             )
         )
 
-    actions += _frame_rate_actions(info, target)
+    if include_rate:  # an exact cut states its own rate change
+        actions += _frame_rate_actions(info, target)
 
     source_mbps = video.bitrate_bps / 1_000_000 if video.bitrate_bps else None
     if target.video_bitrate_mbps and (
@@ -268,6 +317,36 @@ def _trim_actions(info: MediaInfo, trim: TrimRange | None) -> list[ConformAction
     ]
 
 
+def _exact_cut_actions(info: MediaInfo, cut: ExactCut | None) -> list[ConformAction]:
+    if cut is None or info.frame_rate is None:
+        return []
+    held = cut.held_frames
+    if cut.fit is Fit.CONVERT:
+        return [
+            ConformAction(
+                label="Exact duration",
+                from_value=f"{format_clock(cut.seconds)} of source at {info.frame_rate.label()}",
+                to_value=f"{format_clock(cut.seconds)} ({cut.frames} f at {cut.rate.label()})",
+                reason="Cut at exactly the target in real time; the frame rate "
+                "conversion makes the frames, so sound is untouched and in sync",
+            )
+        ]
+    if cut.fit is Fit.SPEED:
+        how = f"picture and sound sped up {float(cut.speed - 1):.1%}, in sync"
+    else:
+        edge = "start" if cut.fit is Fit.HOLD_START else "end"
+        how = f"{held} frame{'s' if held != 1 else ''} held at the {edge}, audio unchanged"
+    return [
+        ConformAction(
+            label="Exact duration",
+            from_value=f"{cut.source_frames} f at {info.frame_rate.label()}",
+            to_value=f"{format_clock(cut.seconds)} ({cut.frames} f at {cut.rate.label()})",
+            reason=f"Every source frame shown once at {cut.rate.label()} fps; {how}",
+            affects_picture_or_sound=True,
+        )
+    ]
+
+
 def _aspect(width: int | None, height: int | None) -> Fraction | None:
     if not width or not height:
         return None
@@ -286,6 +365,7 @@ def build_job(
     *,
     destination: OutputDestination | None = None,
     trim: TrimRange | None = None,
+    target_duration: TargetDuration | None = None,
     loudness: LoudnessResult | None = None,
     normalize: bool = False,
     overwrite: bool = False,
@@ -301,6 +381,8 @@ def build_job(
         extension=profile.output_extension,
         filename=filename,
     )
+    trim = trim if (trim is not None and not trim.is_empty) else None
+    cut, trim = resolve_exact_cut(info, profile.target, trim, target_duration)
     return ExportJob(
         source_path=info.path,
         source_info=info,
@@ -308,10 +390,11 @@ def build_job(
         target=profile.target,
         profile=profile,
         additional_profiles=additional_profiles,
-        trim=trim if (trim is not None and not trim.is_empty) else None,
+        trim=trim,
+        exact_cut=cut,
         normalize_loudness=normalize,
         source_loudness=loudness,
-        actions=plan_conform(info, profile.target, trim, loudness, normalize),
+        actions=plan_conform(info, profile.target, trim, loudness, normalize, cut),
         overwrite=overwrite,
     )
 

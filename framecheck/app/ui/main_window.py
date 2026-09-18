@@ -46,7 +46,7 @@ from ..models.export_job import ExportJob, ExportResult, ExportState, LoudnessRe
 from ..models.media_file import MediaFile, ProbeState, is_supported_media, media_dialog_filter
 from ..models.media_info import MediaInfo
 from ..models.profile import Profile
-from ..models.trim import TrimRange
+from ..models.trim import TargetDuration, TrimRange
 from ..profiles import compatibility
 from ..profiles.loader import ProfileLoader
 from ..profiles.validator import validate
@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         # Strong references to in-flight workers. See _run_worker.
         self._active_workers: set = set()
         self._trims: dict[str, TrimRange] = {}
+        self._targets: dict[str, TargetDuration] = {}
 
         self._profiles: list[Profile] = []
         self._profile_errors: list[str] = []
@@ -822,6 +823,7 @@ class MainWindow(QMainWindow):
             trim = self._trims.get(media_file.key)
             if trim is not None:
                 self.trim_panel.set_trim(trim)
+                self.trim_panel.set_target(self._targets.get(media_file.key))
                 self.player.set_trim(trim)
         if not info.has_video:
             self.player.show_message("No video stream — audio only")
@@ -947,10 +949,16 @@ class MainWindow(QMainWindow):
     def _store_trim(self, trim: TrimRange | None) -> None:
         if self._current is None:
             return
+        key = self._current.key
+        target = self.trim_panel.target()
         if trim is None:
-            self._trims.pop(self._current.key, None)
+            self._trims.pop(key, None)
         else:
-            self._trims[self._current.key] = trim
+            self._trims[key] = trim
+        if trim is None or target is None:
+            self._targets.pop(key, None)
+        else:
+            self._targets[key] = target
         self._rebuild_job()
 
     def _reset_trim(self) -> None:
@@ -1038,6 +1046,7 @@ class MainWindow(QMainWindow):
             profile,
             destination=self._output,
             trim=self._current_trim(),
+            target_duration=self._targets.get(self._current.key),
             loudness=self._current_loudness(),
             normalize=self._normalize,
             overwrite=False,

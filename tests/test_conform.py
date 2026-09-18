@@ -17,7 +17,7 @@ from framecheck.app.models.export_job import LoudnessResult
 from framecheck.app.models.media_info import AudioStreamInfo, MediaInfo, VideoStreamInfo
 from framecheck.app.models.media_time import FrameRate, MediaTime
 from framecheck.app.models.profile import AudioTarget, Profile, TargetSpec
-from framecheck.app.models.trim import TrimRange
+from framecheck.app.models.trim import Fit, TargetDuration, TrimRange
 from framecheck.app.utils.paths import OutputDestination
 
 from conftest import requires_fixtures
@@ -244,3 +244,84 @@ def test_frame_rate_mode_args_sample_a_bounded_window():
 @pytest.mark.parametrize("name", ["clip_23976.mp4", "clip_25_pal.mp4"])
 def test_detect_frame_rate_mode_on_real_cfr_fixtures(fixtures_dir, name):
     assert detect_frame_rate_mode(fixtures_dir / name) == "cfr"
+
+
+# --- exact duration --------------------------------------------------------
+
+SOCIAL_PROFILE = Profile(
+    id="social",
+    name="Social",
+    target=TargetSpec(
+        allowed_frame_rates=(Fraction(30000, 1001), Fraction(30)),
+        preferred_frame_rate=Fraction(30),
+    ),
+)
+
+
+def at_2997() -> MediaInfo:
+    base = on_spec()
+    video = VideoStreamInfo(
+        **{**base.video.__dict__, "r_frame_rate": R2997, "avg_frame_rate": R2997}
+    )
+    return MediaInfo(**{**base.__dict__, "video": video})
+
+
+def fifteen(fit: Fit = Fit.SPEED) -> tuple[TrimRange, TargetDuration]:
+    target = TargetDuration.of(15, fit=fit)
+    return TrimRange.for_target(MediaTime(0, R2997), target), target
+
+
+def test_a_15_preset_at_2997_exports_exactly_15_seconds_in_sync():
+    trim, target = fifteen()
+    job = build_job(at_2997(), SOCIAL_PROFILE, trim=trim, target_duration=target)
+    assert job.exact_cut is not None
+    assert job.expected_duration_seconds == 15
+    assert job.expected_frame_count == 450
+    assert "sped up 0.1%, in sync" in find(job.actions, "Exact duration").reason
+    assert "Frame rate" not in labels(job.actions)
+
+
+def test_hold_fit_says_where_the_frame_is_held():
+    trim, target = fifteen(Fit.HOLD_END)
+    job = build_job(at_2997(), SOCIAL_PROFILE, trim=trim, target_duration=target)
+    assert "1 frame held at the end" in find(job.actions, "Exact duration").reason
+
+
+def test_refused_whole_rate_falls_back_under_the_slot_never_over():
+    trim, target = fifteen()
+    assert trim.frame_count == 450  # 15.015 s at 29.97: over, if sent as-is
+    job = build_job(at_2997(), CTV_PROFILE, trim=trim, target_duration=target)
+    assert job.exact_cut is None
+    assert job.expected_frame_count == 449
+    assert job.expected_duration_seconds < 15
+
+
+def test_a_nudged_out_point_is_the_users_cut_not_the_presets():
+    trim, target = fifteen()
+    nudged = trim.with_out(trim.out_point.offset_frames(-1))
+    job = build_job(at_2997(), SOCIAL_PROFILE, trim=nudged, target_duration=target)
+    assert job.exact_cut is None
+    assert job.trim == nudged
+
+
+def test_a_destination_that_converts_the_rate_gets_an_exact_real_time_cut():
+    """59.94 to a 30 fps destination: no speed-up, just cut 15.000 s."""
+    r5994 = FrameRate(Fraction(60000, 1001))
+    base = on_spec()
+    video = VideoStreamInfo(
+        **{**base.video.__dict__, "r_frame_rate": r5994, "avg_frame_rate": r5994}
+    )
+    info = MediaInfo(**{**base.__dict__, "video": video})
+    target = TargetDuration.of(15)
+    trim = TrimRange.for_target(MediaTime(0, r5994), target)
+    only_30 = Profile(
+        id="thirty",
+        name="Thirty",
+        target=TargetSpec(allowed_frame_rates=(Fraction(30),), preferred_frame_rate=Fraction(30)),
+    )
+    job = build_job(info, only_30, trim=trim, target_duration=target)
+    assert job.exact_cut.fit is Fit.CONVERT
+    assert job.expected_duration_seconds == 15
+    assert job.expected_frame_count == 450
+    assert job.exact_cut.speed == 1
+    assert {"Frame rate", "Exact duration"} <= labels(job.actions)

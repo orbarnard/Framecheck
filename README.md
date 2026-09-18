@@ -31,7 +31,10 @@ export → validate the output**.
   rate, CFR/VFR, scan type.
 - Play back in an embedded **libmpv** player with scrubbing and frame stepping.
 - Trim with draggable IN/OUT markers, numeric timecode entry, duration presets
-  (:06 :15 :30 :60 :90), preview cut and loop cut.
+  (:06 :15 :30 :60 :90), preview cut and loop cut. Presets export at exactly
+  the whole second: 29.97 / 59.94 / 23.976 footage moves to 30 / 60 / 24 fps
+  and plays 0.1 % faster, picture and sound together (or, if you prefer, holds
+  the first or last frame instead). Audio is always cut to the picture length.
 - Validate against JSON delivery profiles, with distinct PASS / WARNING /
   FAIL / MANUAL REVIEW results and a "fix on export" affordance.
 - Select several destinations at once and be told when one master cannot

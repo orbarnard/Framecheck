@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from collections.abc import Callable
 from fractions import Fraction
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -31,7 +33,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..models.media_time import FrameRate, MediaTime, Rounding
-from ..models.trim import STANDARD_TARGET_SECONDS, TargetDuration, TrimRange
+from ..models.trim import (
+    STANDARD_TARGET_SECONDS,
+    Fit,
+    TargetDuration,
+    TargetMode,
+    TrimRange,
+)
 from .theme import Color, Metrics, mono_font_family
 
 _FIELD_WIDTH = 108
@@ -208,6 +216,18 @@ class TrimPanel(QWidget):
         row.addWidget(self.btn_custom)
         self._preset_buttons.append(self.btn_custom)
         row.addStretch(1)
+
+        # How a preset lands whole seconds on 29.97 / 59.94 / 23.976 footage.
+        fit_label = QLabel("Fit", self)
+        fit_label.setObjectName("MetaValueMuted")
+        row.addWidget(fit_label)
+        self.fit_combo = QComboBox(self)
+        self.fit_combo.setFocusPolicy(Qt.NoFocus)
+        self.fit_combo.addItem("Speed up 0.1%", Fit.SPEED)
+        self.fit_combo.addItem("Hold end frame", Fit.HOLD_END)
+        self.fit_combo.addItem("Hold start frame", Fit.HOLD_START)
+        self.fit_combo.currentIndexChanged.connect(self._on_fit_changed)
+        row.addWidget(self.fit_combo)
         return row
 
     def _build_review(self) -> QHBoxLayout:
@@ -248,6 +268,14 @@ class TrimPanel(QWidget):
     def target(self) -> TargetDuration | None:
         return self._target
 
+    def set_target(self, target: TargetDuration | None) -> None:
+        """Programmatic: restore a file's preset without moving its range."""
+        self._target = target
+        self._refresh()
+
+    def fit(self) -> Fit:
+        return self.fit_combo.currentData() or Fit.SPEED
+
     def reset(self) -> None:
         if self._duration is None:
             return
@@ -258,8 +286,8 @@ class TrimPanel(QWidget):
         """Set OUT to IN + `target`, and say what the frame grid can deliver."""
         if self._trim is None:
             return
-        self._target = target
-        self._apply(TrimRange.for_target(self._trim.in_point, target, self._duration))
+        self._target = replace(target, fit=self.fit())
+        self._apply(TrimRange.for_target(self._trim.in_point, self._target, self._duration))
 
     def set_loop_active(self, active: bool) -> None:
         """Reflect loop state driven from elsewhere (the transport, a shortcut)."""
@@ -290,6 +318,16 @@ class TrimPanel(QWidget):
         # Duration is the derived field: editing it moves OUT, never IN.
         self._apply(self._trim.with_out(self._trim.in_point.offset_frames(length.frames)))
 
+    def _on_fit_changed(self, _index: int) -> None:
+        """Re-cut a preset for the new fit; a nudged range is left alone."""
+        target, trim = self._target, self._trim
+        if target is not None and trim is not None and (
+            trim.frame_count == target.frames_at(self._rate)
+        ):
+            self.apply_target(target)
+        else:
+            self._refresh()
+
     def _ask_custom_target(self) -> None:
         current = float(self._target.seconds) if self._target else 30.0
         seconds, accepted = QInputDialog.getDouble(
@@ -318,6 +356,7 @@ class TrimPanel(QWidget):
             self.btn_preview,
             self.btn_loop,
             *self._preset_buttons,
+            self.fit_combo,
         ):
             widget.setEnabled(enabled)
 
@@ -355,6 +394,32 @@ class TrimPanel(QWidget):
 
         if target.is_frame_aligned(self._rate):
             self.alignment_label.hide()
+            return
+
+        cut = target.exact_cut(self._rate)
+        if cut is not None and trim.frame_count == cut.source_frames:
+            held = cut.held_frames
+            if cut.fit is Fit.SPEED:
+                how = (
+                    f"{cut.source_frames} f ({float(cut.source_seconds):.3f} s) "
+                    f"sped up {float(cut.speed - 1):.1%} with the sound, in sync"
+                )
+            else:
+                edge = "start" if cut.fit is Fit.HOLD_START else "end"
+                how = (
+                    f"{cut.source_frames} f + {held} held "
+                    f"frame{'s' if held != 1 else ''} at the {edge}"
+                )
+            self.alignment_label.setText(
+                f"{float(target.seconds):.3f} s is not a frame boundary at "
+                f"{self._rate.label()}. Export runs at {cut.rate.label()} fps: "
+                f"{how} = {cut.frames} f, exactly {float(cut.seconds):.3f} s "
+                f"(if the destination accepts {cut.rate.label()} fps)."
+            )
+            self.alignment_label.show()
+            return
+        if target.mode is TargetMode.EXACT:
+            self.alignment_label.hide()  # range was nudged off the preset
             return
 
         # The request falls between two frames. Framecheck takes the one under
