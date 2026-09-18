@@ -264,3 +264,30 @@ def test_default_loader_points_at_the_repo_specs_dir() -> None:
 def test_manual_status_is_not_a_pass() -> None:
     # Guard the contract the rest of the suite leans on.
     assert CheckStatus.MANUAL_REVIEW.rank > CheckStatus.PASS.rank
+
+
+def test_a_user_spec_replaces_the_built_in_with_the_same_id(tmp_path: Path) -> None:
+    shipped, user = tmp_path / "shipped", tmp_path / "user"
+    shipped.mkdir(), user.mkdir()
+    _write(shipped / "ctv.json", id="ctv", name="CTV")
+    _write(shipped / "yt.json", id="yt", name="YouTube")
+    _write(user / "my_ctv.json", id="ctv", name="CTV (ours)")
+    _write(user / "extra.json", id="extra", name="Extra")
+
+    loader = ProfileLoader(shipped, user)
+    assert [p.name for p in loader.load_all()] == ["CTV (ours)", "Extra", "YouTube"]
+    assert loader.errors == []
+
+
+def test_a_missing_user_folder_is_not_an_error(tmp_path: Path) -> None:
+    _write(tmp_path / "a.json", id="a", name="A")
+    loader = ProfileLoader(tmp_path, tmp_path / "never-made")
+    assert len(loader.load_all()) == 1
+    assert loader.errors == []
+
+
+def test_the_default_loader_reads_the_user_folder(isolated_app_data: Path) -> None:
+    user = isolated_app_data / "Framecheck" / "specs"
+    user.mkdir(parents=True)
+    _write(user / "mine.json", id="mine_only", name="Mine")
+    assert ProfileLoader().get("mine_only") is not None

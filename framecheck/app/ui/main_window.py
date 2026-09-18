@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..media.conform import build_job
+from ... import __version__
 from ..models.batch import BatchItem, BatchPlan
 from ..models.export_job import ExportJob, ExportResult, ExportState, LoudnessResult
 from ..models.media_file import MediaFile, ProbeState, is_supported_media, media_dialog_filter
@@ -48,7 +49,7 @@ from ..models.media_info import MediaInfo
 from ..models.profile import Profile
 from ..models.trim import TargetDuration, TrimRange
 from ..profiles import compatibility
-from ..profiles.loader import ProfileLoader
+from ..profiles.loader import USER_SPECS_README, ProfileLoader, user_specs_dir
 from ..profiles.validator import validate
 from ..services import logging_service
 from ..services.binaries import missing_binaries
@@ -497,6 +498,7 @@ class MainWindow(QMainWindow):
         self._add_action(help_menu, "Open Log", None, self.open_log)
         self._add_action(help_menu, "Technical Details…", None, self.show_technical_details)
         self._add_action(help_menu, "Reload Profiles", None, self._reload_profiles)
+        self._add_action(help_menu, "Open Custom Specs Folder", None, self.open_user_specs)
         help_menu.addSeparator()
         self._add_action(help_menu, f"About {APP_TITLE}", None, self.show_about)
 
@@ -562,7 +564,7 @@ class MainWindow(QMainWindow):
             self._set_status(f"{len(self._profile_errors)} profile(s) could not be loaded — see log")
 
     def _reload_profiles(self) -> None:
-        """Re-read specs/ without restarting -- profiles are user-editable."""
+        """Re-read both specs folders without restarting."""
         self._load_profiles()
         self._revalidate()
         self._set_status(f"Reloaded {len(self._profiles)} profiles")
@@ -1352,6 +1354,19 @@ class MainWindow(QMainWindow):
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+    def open_user_specs(self) -> None:
+        """Open (creating on first use) the specs folder upgrades never touch."""
+        directory = user_specs_dir()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            readme = directory / "README.txt"
+            if not readme.exists():
+                readme.write_text(USER_SPECS_README, encoding="utf-8")
+        except OSError as exc:
+            self._set_status(f"Could not create {directory}: {exc}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
     def show_technical_details(self) -> None:
         from ..media.ffmpeg_builder import build_command_text, build_export_args
         from ..services.binaries import ffmpeg_path, ffprobe_path, libmpv_dir
@@ -1389,7 +1404,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             f"About {APP_TITLE}",
-            f"<b>{APP_TITLE}</b><br>{TAGLINE}<br><br>"
+            f"<b>{APP_TITLE}</b> {__version__}<br>{TAGLINE}<br><br>"
             "Local-only inspection, trimming, validation and delivery conformance "
             "for video files.<br>No cloud processing. Your source files are never "
             "modified.<br><br>Licensed GPL-3.0-or-later. Bundles FFmpeg and libmpv — "

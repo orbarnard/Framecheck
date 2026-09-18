@@ -24,6 +24,17 @@ _RESERVED_NAMES = frozenset(
 )
 
 
+def app_data_dir() -> Path:
+    """Per-user data folder, %LOCALAPPDATA%\\Framecheck. Not created here.
+
+    Outside the install folder on purpose: an upgrade replaces the install
+    folder's contents, and nothing a user made may live there.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / "Framecheck"
+
+
 # Prefix stamped on every file Framecheck writes. Makes conformed deliverables
 # obvious next to the originals they were cut from.
 OUTPUT_PREFIX = "FC_"

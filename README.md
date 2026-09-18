@@ -179,8 +179,18 @@ never `"fail"`, and anything a machine cannot honestly determine — a legal
 disclaimer, safe zones, creative approval — must use `manual: true`, which
 always reports MANUAL REVIEW and can never be auto-passed.
 
-Edit a file in `specs/` and use **Help ▸ Reload Profiles** to pick it up without
-restarting.
+In an installed copy, custom specs go in **Help ▸ Open Custom Specs Folder**
+(`%LOCALAPPDATA%\Framecheck\specs`), which updates never touch. A spec there
+with the same `id` as a built-in replaces it. Use **Help ▸ Reload Profiles** to
+pick up edits without restarting. Updating from 0.1.0, setup moves any spec
+you edited inside the install folder into that folder for you.
+
+## Releasing
+
+The version lives only in `framecheck/__init__.py`. Bump it there, then
+`python tools/build_exe.py --installer`; the exe, the installer and its
+filename all follow. Users run the new setup over the old install: no
+uninstall, settings and custom specs kept.
 
 ## Getting started
 

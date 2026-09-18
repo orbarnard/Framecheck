@@ -15,6 +15,7 @@ Qt DLLs being visible at the top level is the point, not a side effect.
 Build with `python tools/build_exe.py`, not by invoking pyinstaller directly.
 """
 
+import re
 from pathlib import Path
 
 from PyInstaller.utils.win32.versioninfo import (
@@ -28,7 +29,11 @@ from PyInstaller.utils.win32.versioninfo import (
 )
 
 ROOT = Path(SPECPATH).parent
-VERSION = "0.1.0"
+# Read, not imported: the spec runs inside PyInstaller, not the app's environment.
+VERSION = re.search(
+    r'__version__ = "([^"]+)"', (ROOT / "framecheck" / "__init__.py").read_text(encoding="utf-8")
+).group(1)
+VERSION_TUPLE = (*(int(part) for part in VERSION.split(".")), 0)
 
 # framecheck/app/main.py uses relative imports, so it cannot be the entry script
 # directly -- PyInstaller runs the entry as __main__, with no parent package.
@@ -137,8 +142,8 @@ pyz = PYZ(a.pure)
 
 version_info = VSVersionInfo(
     ffi=FixedFileInfo(
-        filevers=(0, 1, 0, 0),
-        prodvers=(0, 1, 0, 0),
+        filevers=VERSION_TUPLE,
+        prodvers=VERSION_TUPLE,
         mask=0x3F,
         flags=0x0,
         OS=0x40004,

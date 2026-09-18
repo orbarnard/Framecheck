@@ -22,9 +22,14 @@ Everything runs on this machine. Nothing is uploaded anywhere.
 Custom delivery specs
 ---------------------
 
-Delivery profiles are plain JSON files in the "specs" folder inside the
-installation directory. Edit one, or add your own destination, then use
-Help > Reload Profiles. No rebuild required.
+Use Help > Open Custom Specs Folder. Any delivery spec JSON you put there is
+loaded alongside the built-in ones, and one with the same "id" as a built-in
+replaces it -- copy a built-in from the "specs" folder in the installation
+directory to start from. Then use Help > Reload Profiles.
+
+Updates never touch that folder. Do not edit the "specs" folder in the
+installation directory: each update replaces it. (If you already did, setup
+moved your edited files into the custom folder for you.)
 
 Licence
 -------

@@ -43,6 +43,15 @@ requires_fixtures = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_app_data(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point %LOCALAPPDATA% somewhere empty, so custom specs on the machine
+    running the tests cannot change what the default loader sees."""
+    root = tmp_path_factory.mktemp("localappdata")
+    monkeypatch.setenv("LOCALAPPDATA", str(root))
+    return root
+
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES_DIR

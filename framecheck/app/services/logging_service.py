@@ -7,11 +7,12 @@ default. "Open Log" in the Help menu reveals it.
 from __future__ import annotations
 
 import logging
-import os
 import platform
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from ..utils.paths import app_data_dir
 
 APP_NAME = "Framecheck"
 
@@ -24,9 +25,7 @@ _log_file: Path | None = None
 
 def log_directory() -> Path:
     """Per-user log directory. Created on demand."""
-    base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".local" / "share"
-    directory = root / APP_NAME / "logs"
+    directory = app_data_dir() / "logs"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

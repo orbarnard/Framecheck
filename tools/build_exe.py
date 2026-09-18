@@ -3,13 +3,18 @@
     python tools/build_exe.py [--zip] [--installer] [--clean]
 
 Produces `dist/Framecheck/` (PyInstaller onedir -- see build/framecheck.spec for
-why it must not be onefile) and, with --zip, `dist/Framecheck-0.1.0-win64.zip`
+why it must not be onefile) and, with --zip, `dist/Framecheck-<version>-win64.zip`
 ready to attach to a GitHub release.
+
+The version comes from `framecheck/__init__.py` and nowhere else: bump it there
+and every artefact follows.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -20,7 +25,9 @@ SPEC = ROOT / "build" / "framecheck.spec"
 WORK = ROOT / "build" / "build"
 DIST = ROOT / "dist"
 OUT = DIST / "Framecheck"
-VERSION = "0.1.0"
+VERSION = re.search(
+    r'__version__ = "([^"]+)"', (ROOT / "framecheck" / "__init__.py").read_text(encoding="utf-8")
+).group(1)
 
 # Downloaded by tools/fetch_binaries.py. Without these the build would succeed
 # and the app would be unusable, so refuse up front.
@@ -120,6 +127,34 @@ def find_iscc() -> Path | None:
     return Path(found) if found else None
 
 
+def shipped_spec_hashes() -> list[str]:
+    """SHA-1 of every spec file any release could have installed.
+
+    The installer uses these to tell a spec the user edited (or added) inside
+    the install folder from one Framecheck put there, and rescues the former
+    before the upgrade overwrites it. Every version in git history counts, in
+    both line-ending forms, because a release may have been built from either.
+    """
+    contents = {p.read_bytes() for p in (ROOT / "specs").glob("*.json")}
+    try:
+        log = subprocess.run(
+            ["git", "log", "--all", "--format=", "--raw", "--no-abbrev", "--", "specs/*.json"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        blobs = {b for b in re.findall(r"\b[0-9a-f]{40}\b", log) if set(b) != {"0"}}
+        for blob in blobs:
+            contents.add(subprocess.run(
+                ["git", "cat-file", "-p", blob], cwd=ROOT, capture_output=True, check=True
+            ).stdout)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"warning: no git history for specs ({exc}); only current specs are known")
+    hashes = set()
+    for data in contents:
+        lf = data.replace(b"\r\n", b"\n")
+        hashes |= {hashlib.sha1(v).hexdigest() for v in (lf, lf.replace(b"\n", b"\r\n"))}
+    return sorted(hashes)
+
+
 def build_installer() -> int:
     """Compile the single-file installer from the onedir build."""
     iscc = find_iscc()
@@ -133,7 +168,11 @@ def build_installer() -> int:
         return 1
 
     script = ROOT / "build" / "framecheck.iss"
-    result = subprocess.run([str(iscc), str(script)], cwd=ROOT)
+    defines = [
+        f"/DAppVersion={VERSION}",
+        f"/DKnownSpecHashes=;{';'.join(shipped_spec_hashes())};",
+    ]
+    result = subprocess.run([str(iscc), *defines, str(script)], cwd=ROOT)
     if result.returncode != 0:
         return result.returncode
 
