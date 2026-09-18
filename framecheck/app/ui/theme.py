@@ -644,27 +644,222 @@ QPushButton#InspectorTab:checked {{
     background-color: {Color.SURFACE};
 }}
 
-QPushButton#Preset {{
-    background-color: {Color.SURFACE_RAISED};
-    border: 1px solid {Color.BORDER};
-    border-radius: {Metrics.RADIUS_SM}px;
-    color: {Color.TEXT_SECONDARY};
-    font-family: "__MONO_FAMILY__";
+/* Trim panel: numbered steps, the length strip, fit cards, the verdict. */
+#StepBadge {{
+    background-color: {Color.ACCENT_SUBTLE};
+    border: 1px solid {Color.ACCENT};
+    border-radius: 10px;
+    color: #8b92ff;
     font-size: 11px;
-    padding: 3px 8px;
-    min-width: 34px;
+    font-weight: 700;
 }}
 
-QPushButton#Preset:hover {{
-    background-color: {Color.SURFACE_ACTIVE};
+#StepLabel {{
+    color: {Color.TEXT_SECONDARY};
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}}
+
+QPushButton#Segment {{
+    background-color: {Color.SURFACE_RAISED};
+    border: 1px solid {Color.BORDER};
+    border-radius: 0px;
+    margin-left: -1px;
     color: {Color.TEXT};
+    font-family: "__MONO_FAMILY__";
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 13px;
+}}
+
+QPushButton#Segment[pos="first"] {{
+    margin-left: 0px;
+    border-top-left-radius: {Metrics.RADIUS}px;
+    border-bottom-left-radius: {Metrics.RADIUS}px;
+}}
+
+QPushButton#Segment[pos="last"] {{
+    border-top-right-radius: {Metrics.RADIUS}px;
+    border-bottom-right-radius: {Metrics.RADIUS}px;
+    font-family: "Segoe UI";
+}}
+
+QPushButton#Segment:hover {{
+    background-color: {Color.SURFACE_ACTIVE};
+}}
+
+QPushButton#Segment:checked {{
+    background-color: {Color.ACCENT};
+    border-color: {Color.ACCENT};
+    color: {Color.ACCENT_TEXT};
+}}
+
+#FitCard {{
+    background-color: {Color.SURFACE_RAISED};
+    border: 1px solid {Color.BORDER};
+    border-radius: 8px;
+}}
+
+#FitCard:hover {{
     border-color: {Color.BORDER_STRONG};
 }}
 
-QPushButton#Preset:checked {{
+#FitCard[selected="true"] {{
     background-color: {Color.ACCENT_SUBTLE};
     border-color: {Color.ACCENT};
+}}
+
+#FitCard[locked="true"] {{
+    background-color: {Color.SURFACE};
+    border-color: {Color.SEPARATOR};
+}}
+
+QRadioButton#FitCardTitle::indicator {{
+    width: 12px;
+    height: 12px;
+    border-radius: 7px;
+    border: 1px solid {Color.TEXT_TERTIARY};
+    background-color: {Color.SURFACE};
+}}
+
+QRadioButton#FitCardTitle::indicator:checked {{
+    width: 6px;
+    height: 6px;
+    border: 4px solid {Color.ACCENT};
+    background-color: {Color.ACCENT_TEXT};
+}}
+
+QRadioButton#FitCardTitle::indicator:disabled {{
+    border-color: {Color.BORDER};
+    background-color: transparent;
+}}
+
+QRadioButton#FitCardTitle {{
     color: {Color.TEXT};
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+QRadioButton#FitCardTitle:disabled {{
+    color: {Color.TEXT_TERTIARY};
+}}
+
+#FitCardText {{
+    color: {Color.TEXT_SECONDARY};
+    font-size: 11px;
+    background: transparent;
+}}
+
+#FitCardText[locked="true"] {{
+    color: {Color.WARNING};
+}}
+
+#FitCardCaption {{
+    color: {Color.TEXT_TERTIARY};
+    font-size: 10px;
+    background: transparent;
+}}
+
+#FitBadge {{
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 1px 5px;
+    background: transparent;
+}}
+
+#FitBadge[tone="best"] {{
+    border: 1px solid {Color.PASS};
+    color: {Color.PASS};
+}}
+
+#FitBadge[tone="auto"] {{
+    border: 1px solid #8b92ff;
+    color: #8b92ff;
+}}
+
+#FitBadge[tone="locked"] {{
+    border: 1px solid {Color.BORDER_STRONG};
+    color: {Color.TEXT_TERTIARY};
+}}
+
+#Placeholder {{
+    border: 1px dashed {Color.BORDER_STRONG};
+    border-radius: 8px;
+    color: {Color.TEXT_TERTIARY};
+    font-size: 12px;
+    padding: 14px;
+}}
+
+#Banner {{
+    border-radius: 8px;
+    border: 1px solid {Color.BORDER};
+}}
+
+#Banner[tone="ok"] {{
+    background-color: #0e1f14;
+    border-color: #1f5130;
+}}
+
+#Banner[tone="warn"] {{
+    background-color: #231a08;
+    border-color: #5c4410;
+}}
+
+#BannerIcon {{
+    border-radius: 14px;
+    color: {Color.CANVAS};
+    font-size: 15px;
+    font-weight: 800;
+}}
+
+#BannerIcon[tone="ok"] {{
+    background-color: {Color.PASS};
+}}
+
+#BannerIcon[tone="warn"] {{
+    background-color: {Color.WARNING};
+}}
+
+#BannerHeadline {{
+    color: {Color.TEXT};
+    font-size: 15px;
+    font-weight: 700;
+    background: transparent;
+}}
+
+#BannerDetail {{
+    color: {Color.TEXT_SECONDARY};
+    font-size: 11px;
+    background: transparent;
+}}
+
+#Chip {{
+    background-color: {Color.SURFACE};
+    border: 1px solid #1f5130;
+    border-radius: 9px;
+    color: {Color.TEXT_SECONDARY};
+    font-family: "__MONO_FAMILY__";
+    font-size: 11px;
+    padding: 1px 8px;
+}}
+
+QPushButton#FixWarn {{
+    background-color: {Color.WARNING};
+    border: 1px solid {Color.WARNING};
+    color: #1a1204;
+    font-weight: 700;
+}}
+
+QPushButton#FixWarn:hover {{
+    background-color: #e0a92f;
+}}
+
+#TrimFooter {{
+    border-top: 1px solid {Color.SEPARATOR};
 }}
 
 /* Inline "Fix on export" affordance next to a failing check. */

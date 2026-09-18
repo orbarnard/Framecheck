@@ -11,6 +11,9 @@ from framecheck.app.models.trim import (
     STANDARD_TARGET_SECONDS,
     ExactCut,
     Fit,
+    fit_options,
+    resolve_fit,
+    suggest_target,
     TargetDuration,
     TargetMode,
     TrimRange,
@@ -400,3 +403,42 @@ def test_other_modes_never_retime() -> None:
 
 def test_exact_gives_up_when_the_whole_rate_cannot_land_it_either() -> None:
     assert TargetDuration.of(Fraction(1, 7)).exact_cut(R_2997) is None
+
+
+# --------------------------------------------------------------------------
+# Fit planning: what the trim panel offers, and its fallbacks
+# --------------------------------------------------------------------------
+
+R_23976 = FrameRate(Fraction(24000, 1001))
+
+
+def test_a_master_cut_a_frame_under_cannot_be_sped_up_but_can_hold() -> None:
+    """The real case: a 29.988 s, 719-frame 23.976 master and a :30."""
+    options = {o.fit: o for o in fit_options(TargetDuration.of(30), R_23976, 719)}
+    assert not options[Fit.SPEED].available
+    assert "needs 30.030 s of footage, has 29.988 s" in options[Fit.SPEED].reason
+    assert options[Fit.HOLD_END].available and options[Fit.HOLD_START].available
+
+
+def test_resolve_fit_switches_to_holding_the_end_only_when_it_must() -> None:
+    target, switched = resolve_fit(TargetDuration.of(30), R_23976, 719)
+    assert (target.fit, switched) == (Fit.HOLD_END, True)
+    target, switched = resolve_fit(TargetDuration.of(30), R_23976, 5000)
+    assert (target.fit, switched) == (Fit.SPEED, False)
+
+
+def test_resolve_fit_keeps_a_chosen_hold() -> None:
+    chosen = TargetDuration.of(30, fit=Fit.HOLD_START)
+    assert resolve_fit(chosen, R_23976, 719) == (chosen, False)
+
+
+def test_nothing_to_choose_on_an_aligned_rate() -> None:
+    assert fit_options(TargetDuration.of(30), R_25, 5000) == []
+
+
+def test_suggest_the_nearest_standard_length_the_footage_allows() -> None:
+    assert suggest_target(Fraction(28428, 1000), R_2997, 5000).seconds == 30
+    assert suggest_target(Fraction(16), R_2997, 5000).seconds == 15
+    # 20 s of footage cannot make a :30, so the nearest that fits is a :15.
+    assert suggest_target(Fraction(20), R_2997, 600).seconds == 15
+    assert suggest_target(Fraction(3), R_2997, 60) is None

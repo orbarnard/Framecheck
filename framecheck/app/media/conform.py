@@ -15,6 +15,7 @@ import json
 import logging
 from fractions import Fraction
 from pathlib import Path
+from typing import NamedTuple
 
 from ..models.export_job import ConformAction, ExportJob, LoudnessResult
 from ..models.media_info import MediaInfo
@@ -397,6 +398,25 @@ def build_job(
         actions=plan_conform(info, profile.target, trim, loudness, normalize, cut),
         overwrite=overwrite,
     )
+
+
+class ExportOutcome(NamedTuple):
+    """What the written file will measure: the trim panel's banner shows this,
+    so the promise on screen comes from the same job that encodes."""
+
+    seconds: Fraction | None
+    frames: int | None
+    rate: Fraction | None
+
+
+def export_outcome(job: ExportJob) -> ExportOutcome:
+    cut = job.exact_cut
+    rate = cut.rate.value if cut else resolve_frame_rate(job.source_info, job.target)
+    seconds = job.picture_seconds or job.expected_duration_seconds
+    frames = cut.frames if cut else (
+        int(seconds * rate + Fraction(1, 2)) if seconds is not None and rate else None
+    )
+    return ExportOutcome(seconds, frames, rate)
 
 
 def build_frame_rate_mode_args(path: Path) -> list[str]:

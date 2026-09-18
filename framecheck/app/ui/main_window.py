@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..media.conform import build_job
+from ..media.conform import build_job, export_outcome
 from ... import __version__
 from ..models.batch import BatchItem, BatchPlan
 from ..models.export_job import ExportJob, ExportResult, ExportState, LoudnessResult
@@ -1035,6 +1035,7 @@ class MainWindow(QMainWindow):
             self._job = None
             self.conform_panel.show_empty()
             self.export_panel.show_empty()
+            self.trim_panel.set_outcome(None)
             return
 
         others = tuple(p for p in self._selected_profiles if p.id != profile.id)
@@ -1056,6 +1057,7 @@ class MainWindow(QMainWindow):
             additional_profiles=others,
         )
         self._job = job
+        self.trim_panel.set_outcome(export_outcome(job))
 
         self.conform_panel.set_job(job)
         self.conform_panel.set_actions(list(job.actions))

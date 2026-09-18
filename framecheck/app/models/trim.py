@@ -19,7 +19,7 @@ starting at frame 0 with 900 frames has OUT at frame 900.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from fractions import Fraction
 
@@ -290,6 +290,80 @@ class TrimRange:
 
     def __str__(self) -> str:
         return f"{self.in_point.to_clock()} -> {self.out_point.to_clock()} ({self.frame_count}f)"
+
+
+# The order the trim panel offers fits in, and falls back through when the
+# preferred one cannot be made from the footage there is.
+FIT_ORDER: tuple[Fit, ...] = (Fit.SPEED, Fit.HOLD_END, Fit.HOLD_START)
+
+
+@dataclass(frozen=True)
+class FitOption:
+    """One way to land a target exactly, and whether this footage allows it."""
+
+    fit: Fit
+    cut: ExactCut
+    available: bool
+    reason: str | None = None  # why not, in the user's words
+
+
+def fit_options(
+    target: TargetDuration, rate: FrameRate, available_frames: int | None
+) -> list[FitOption]:
+    """Every fit for `target` at `rate`, marked usable or not.
+
+    Empty when the target is not EXACT or already lands on a frame boundary --
+    there is then nothing to choose. `available_frames` is the footage from IN
+    to the end of the source; None means unknown, and assumes enough.
+    """
+    options: list[FitOption] = []
+    for fit in FIT_ORDER:
+        cut = replace(target, fit=fit).exact_cut(rate)
+        if cut is None:
+            return []
+        ok = available_frames is None or cut.source_frames <= available_frames
+        reason = None
+        if not ok:
+            needs = Fraction(cut.source_frames) / rate.value
+            has = Fraction(available_frames or 0) / rate.value
+            reason = f"File too short: needs {float(needs):.3f} s of footage, has {float(has):.3f} s."
+        options.append(FitOption(fit, cut, ok, reason))
+    return options
+
+
+def resolve_fit(
+    target: TargetDuration, rate: FrameRate, available_frames: int | None
+) -> tuple[TargetDuration, bool]:
+    """The target with a fit this footage can make, and whether it was switched.
+
+    A master already cut a frame under (29.988 s at 23.976) cannot be sped up
+    to a :30 -- that needs 30.030 s of footage -- but holding its last frame
+    lands exactly. Keeps the preferred fit whenever it works.
+    """
+    options = fit_options(target, rate, available_frames)
+    if not options or any(o.fit is target.fit and o.available for o in options):
+        return target, False
+    for option in options:
+        if option.available:
+            return replace(target, fit=option.fit), True
+    return target, False
+
+
+def suggest_target(
+    seconds: Fraction, rate: FrameRate, available_frames: int | None
+) -> TargetDuration | None:
+    """The standard length nearest `seconds` that this footage can make exactly."""
+    for whole in sorted(STANDARD_TARGET_SECONDS, key=lambda s: (abs(s - seconds), s)):
+        target = TargetDuration.of(whole)
+        options = fit_options(target, rate, available_frames)
+        if options:
+            if any(o.available for o in options):
+                return target
+        elif target.is_frame_aligned(rate) and (
+            available_frames is None or target.frames_at(rate) <= available_frames
+        ):
+            return target
+    return None
 
 
 @dataclass(frozen=True)

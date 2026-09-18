@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from framecheck.app.media.conform import (
+    export_outcome,
     build_frame_rate_mode_args,
     build_job,
     detect_frame_rate_mode,
@@ -325,3 +326,11 @@ def test_a_destination_that_converts_the_rate_gets_an_exact_real_time_cut():
     assert job.expected_frame_count == 450
     assert job.exact_cut.speed == 1
     assert {"Frame rate", "Exact duration"} <= labels(job.actions)
+
+
+def test_the_outcome_the_banner_shows_is_the_jobs():
+    trim, target = fifteen()
+    job = build_job(at_2997(), SOCIAL_PROFILE, trim=trim, target_duration=target)
+    assert export_outcome(job) == (15, 450, 30)
+    fallback = build_job(at_2997(), CTV_PROFILE, trim=trim, target_duration=target)
+    assert export_outcome(fallback) == (Fraction(449 * 1001, 30000), 449, Fraction(30000, 1001))
