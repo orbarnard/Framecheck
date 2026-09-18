@@ -334,3 +334,44 @@ def test_the_outcome_the_banner_shows_is_the_jobs():
     assert export_outcome(job) == (15, 450, 30)
     fallback = build_job(at_2997(), CTV_PROFILE, trim=trim, target_duration=target)
     assert export_outcome(fallback) == (Fraction(449 * 1001, 30000), 449, Fraction(30000, 1001))
+
+
+def test_a_preset_spanning_the_whole_file_still_gets_its_exact_cut():
+    """The real bug: a 719-frame (29.988 s) 23.976 master, :30, hold end.
+
+    The range is the whole file, so it arrives as no trim at all -- and the
+    export must still be 720 frames at 24 fps, exactly 30.000 s."""
+    base = on_spec()  # 23.976
+    info = MediaInfo(**{**base.__dict__, "duration_seconds": Fraction(719 * 1001, 24000)})
+    target = TargetDuration.of(30, fit=Fit.HOLD_END)
+    online = Profile(
+        id="olv",
+        name="Online Video",
+        target=TargetSpec(
+            allowed_frame_rates=(Fraction(24000, 1001), Fraction(24), Fraction(25)),
+            preferred_frame_rate=Fraction(25),
+        ),
+    )
+    job = build_job(info, online, trim=None, target_duration=target)
+    assert job.exact_cut is not None and job.exact_cut.held_frames == 1
+    assert export_outcome(job) == (30, 720, 24)
+
+
+def test_a_conversion_to_2997_uses_30_when_allowed_so_the_slot_lands():
+    r5994 = FrameRate(Fraction(60000, 1001))
+    base = on_spec()
+    video = VideoStreamInfo(**{**base.video.__dict__, "r_frame_rate": r5994, "avg_frame_rate": r5994})
+    info = MediaInfo(**{**base.__dict__, "video": video, "duration_seconds": Fraction(60)})
+    ctv = Profile(
+        id="ctv",
+        name="CTV",
+        target=TargetSpec(
+            allowed_frame_rates=(Fraction(30000, 1001), Fraction(30)),
+            preferred_frame_rate=Fraction(30000, 1001),
+        ),
+    )
+    target = TargetDuration.of(15)
+    trim = TrimRange.for_target(MediaTime(0, r5994), target)
+    job = build_job(info, ctv, trim=trim, target_duration=target)
+    assert job.exact_cut.fit is Fit.CONVERT
+    assert export_outcome(job) == (15, 450, 30)

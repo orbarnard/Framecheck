@@ -76,10 +76,13 @@ def resolve_exact_cut(
       is accepted, a frame over is not.
     """
     rate = info.frame_rate
-    if trim is None or duration is None or rate is None:
+    if duration is None or rate is None:
         return None, trim
+    # A preset that spans the whole file (a master already cut to 29.988 s)
+    # reaches here as no trim at all; it is still the preset's cut.
+    span = trim if trim is not None else (TrimRange.full(info.duration) if info.duration else None)
     cut = duration.exact_cut(rate)
-    if cut is None or trim.frame_count != cut.source_frames:
+    if span is None or cut is None or span.frame_count != cut.source_frames:
         return None, trim
     resolved = resolve_frame_rate(info, target)
     if resolved == rate.value and (
@@ -87,14 +90,19 @@ def resolve_exact_cut(
     ):
         return cut, trim
     if resolved is not None and resolved != rate.value:
-        frames = duration.seconds * resolved
-        if frames.denominator == 1:
-            converted = ExactCut(
-                rate, FrameRate(resolved), int(frames), int(frames), Fit.CONVERT
-            )
-            return converted, trim
+        # The destination converts anyway. Its own rate may not land the slot
+        # (59.94 -> 29.97); the whole rate beside it does, if it is allowed.
+        whole = Fraction(FrameRate(resolved).nominal)
+        candidates = [resolved]
+        if not target.allowed_frame_rates or whole in target.allowed_frame_rates:
+            candidates.append(whole)
+        for out in candidates:
+            frames = duration.seconds * out
+            if frames.denominator == 1:
+                converted = ExactCut(rate, FrameRate(out), int(frames), int(frames), Fit.CONVERT)
+                return converted, trim
     under = TargetDuration(duration.seconds, TargetMode.AT_OR_UNDER).frames_at(rate)
-    return None, TrimRange(trim.in_point, trim.in_point.offset_frames(under))
+    return None, TrimRange(span.in_point, span.in_point.offset_frames(under))
 
 
 def _container_actions(info: MediaInfo, target: TargetSpec) -> list[ConformAction]:
