@@ -11,7 +11,7 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QIcon, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
@@ -57,6 +57,30 @@ def configure_surface_format() -> None:
     QSurfaceFormat.setDefaultFormat(surface_format)
 
 
+class FileOpenRouter(QObject):
+    """Routes the files macOS hands the app to the main window.
+
+    Finder's Open With, a double-click on an associated movie, or a drop on
+    the Dock icon do not put the path in sys.argv: Launch Services delivers a
+    QFileOpenEvent to the application instead, at launch or while running.
+    Installed on the application before the event loop starts, so a file
+    given at launch is caught too.
+    """
+
+    def __init__(self, window) -> None:  # noqa: ANN001 - MainWindow, imported late
+        super().__init__(window)
+        self._window = window
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001 - Qt signature
+        if event.type() == QEvent.FileOpen:
+            path = event.file()
+            if path:
+                log.info("file open event: %s", path)
+                self._window.open_path(Path(path))
+                return True
+        return super().eventFilter(watched, event)
+
+
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="framecheck", description="Video, to spec.")
     parser.add_argument("path", nargs="?", help="video file or folder to open on launch")
@@ -92,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_theme(app)
 
     window = MainWindow(Settings())
+    app.installEventFilter(FileOpenRouter(window))
     window.show()
 
     if args.path:

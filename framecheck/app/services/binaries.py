@@ -149,13 +149,28 @@ def run_tool(
     )
 
 
+def libmpv_loaded() -> bool:
+    """True once python-mpv has imported, which means libmpv itself loaded.
+
+    python-mpv loads the library at import time and raises if it cannot, so
+    the module is in sys.modules only when a libmpv was found -- the bundled
+    one, or a system one (a distro package, or Homebrew in a checkout).
+    """
+    return sys.modules.get("mpv") is not None
+
+
 def missing_binaries() -> list[str]:
-    """Names of required binaries that could not be located."""
+    """Names of required binaries that could not be located.
+
+    ffmpeg and ffprobe count as present when found on PATH; libmpv counts as
+    present when bundled or when it has already been loaded from the system,
+    which is how a checkout without vendor/ runs on Linux or macOS.
+    """
     missing = []
     if ffprobe_path() is None:
         missing.append("ffprobe")
     if ffmpeg_path() is None:
         missing.append("ffmpeg")
-    if libmpv_dir() is None:
+    if libmpv_dir() is None and not libmpv_loaded():
         missing.append("libmpv")
     return missing

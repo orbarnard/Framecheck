@@ -112,3 +112,19 @@ def test_windows_registration_prepends_path(vendor: Path, monkeypatch: pytest.Mo
 
     assert binaries.register_libmpv_search_path() is True
     assert os.environ["PATH"].split(os.pathsep)[0] == str(playback)
+
+
+def test_a_loaded_system_libmpv_is_not_reported_missing(
+    vendor: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkout on Linux or macOS runs on the distro's or Homebrew's libmpv
+    without a vendor/ copy; python-mpv having imported is the proof it loaded."""
+    _platform(monkeypatch, "darwin")
+    monkeypatch.setattr(binaries, "ffprobe_path", lambda: Path("/usr/bin/ffprobe"))
+    monkeypatch.setattr(binaries, "ffmpeg_path", lambda: Path("/usr/bin/ffmpeg"))
+
+    monkeypatch.setitem(binaries.sys.modules, "mpv", object())
+    assert binaries.missing_binaries() == []
+
+    monkeypatch.delitem(binaries.sys.modules, "mpv")
+    assert binaries.missing_binaries() == ["libmpv"]

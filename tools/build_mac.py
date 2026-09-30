@@ -16,7 +16,9 @@ bundle, which runs on the build machine but is stopped by Gatekeeper on any
 other Mac until the user allows it once (the DMG carries a readme explaining
 how). With --sign and a Developer ID certificate in the keychain, the bundle
 gets a real signature with the hardened runtime, and the DMG is notarised and
-stapled if Apple credentials are in the environment:
+stapled. --sign refuses to run without the Apple credentials, because a signed
+but un-notarised build is still stopped by Gatekeeper and would ship without
+the readme; --skip-notarization is the explicit way to get such a build.
 
     FRAMECHECK_CODESIGN_IDENTITY   "Developer ID Application: Name (TEAMID)"
     APPLE_ID                       the Apple ID that owns the certificate
@@ -92,7 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--sign",
         action="store_true",
-        help="sign with FRAMECHECK_CODESIGN_IDENTITY and, with Apple credentials, notarise the DMG",
+        help="sign with FRAMECHECK_CODESIGN_IDENTITY and notarise the DMG with the Apple credentials",
+    )
+    parser.add_argument(
+        "--skip-notarization",
+        action="store_true",
+        help="with --sign: sign only. The DMG then still needs the Gatekeeper workaround, and says so",
     )
     parser.add_argument("--clean", action="store_true", help="discard cached build state first")
     args = parser.parse_args(argv)
@@ -102,6 +109,16 @@ def main(argv: list[str] | None = None) -> int:
     identity = os.environ.get("FRAMECHECK_CODESIGN_IDENTITY", "").strip()
     if args.sign and not identity:
         raise SystemExit("--sign needs FRAMECHECK_CODESIGN_IDENTITY in the environment.")
+    notarise = args.sign and not args.skip_notarization
+    if notarise and not notarization_credentials():
+        # Refused up front rather than after a long build: a signed but
+        # un-notarised DMG is still blocked by Gatekeeper, and a release made
+        # of one would ship without the readme that explains the workaround.
+        raise SystemExit(
+            "--sign notarises the DMG, which needs APPLE_ID, APPLE_TEAM_ID and "
+            "APPLE_APP_PASSWORD in the environment. Set them, or pass "
+            "--skip-notarization to sign without notarising."
+        )
     if not args.sign:
         # The spec reads the variable; make sure a stray value does not sign
         # a build nobody asked to be signed.
@@ -139,8 +156,17 @@ def main(argv: list[str] | None = None) -> int:
         verify_signature(APP)
 
     if args.dmg:
-        return build_dmg(identity)
+        return build_dmg(identity, notarise)
     return 0
+
+
+def notarization_credentials() -> tuple[str, str, str] | None:
+    apple_id = os.environ.get("APPLE_ID", "").strip()
+    team_id = os.environ.get("APPLE_TEAM_ID", "").strip()
+    password = os.environ.get("APPLE_APP_PASSWORD", "").strip()
+    if apple_id and team_id and password:
+        return apple_id, team_id, password
+    return None
 
 
 def verify_signature(bundle: Path) -> None:
@@ -150,7 +176,7 @@ def verify_signature(bundle: Path) -> None:
     print("Signed: codesign verification passed")
 
 
-def build_dmg(identity: str) -> int:
+def build_dmg(identity: str, notarise: bool) -> int:
     """Wrap the bundle in a compressed, drag-to-Applications disk image."""
     dmg = DIST / f"Framecheck-{VERSION}-macos-{ARCH}.dmg"
     staging = WORK / "dmg"
@@ -162,8 +188,9 @@ def build_dmg(identity: str) -> int:
     # a plain copy can quietly break.
     subprocess.run(["ditto", str(APP), str(staging / APP.name)], check=True)
     (staging / "Applications").symlink_to("/Applications")
-    if not identity:
-        # An unsigned app gets stopped by Gatekeeper; the readme says what to do.
+    if not notarise:
+        # Anything short of notarised gets stopped by Gatekeeper; the readme
+        # says what to do about it.
         shutil.copy2(ROOT / "build" / "dmg_readme.txt", staging / "READ ME FIRST.txt")
 
     if dmg.exists():
@@ -189,21 +216,18 @@ def build_dmg(identity: str) -> int:
 
     if identity:
         subprocess.run(["codesign", "--sign", identity, "--timestamp", str(dmg)], check=True)
+    if notarise:
         notarize(dmg)
+    else:
+        print("Not notarised: Gatekeeper will stop this build; the readme inside explains.")
     return 0
 
 
 def notarize(dmg: Path) -> None:
-    apple_id = os.environ.get("APPLE_ID", "").strip()
-    team_id = os.environ.get("APPLE_TEAM_ID", "").strip()
-    password = os.environ.get("APPLE_APP_PASSWORD", "").strip()
-    if not (apple_id and team_id and password):
-        print(
-            "Not notarised: set APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD to "
-            "notarise. A signed but un-notarised app is still stopped by Gatekeeper.",
-            file=sys.stderr,
-        )
-        return
+    credentials = notarization_credentials()
+    if credentials is None:  # main() checks before building; belt and braces
+        raise SystemExit("notarisation needs APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD")
+    apple_id, team_id, password = credentials
     subprocess.run(
         [
             "xcrun",
