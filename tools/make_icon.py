@@ -6,7 +6,8 @@ adjusted by editing values here and re-running:
     python tools/make_icon.py
 
 Writes assets/framecheck.ico (multi-size, for the Windows taskbar and the
-PyInstaller build) and assets/framecheck.png for documentation.
+PyInstaller build), assets/framecheck.icns (for the macOS app bundle and Dock)
+and assets/framecheck.png for documentation.
 
 The mark: two corner brackets forming a video frame, with a check mark cut
 through the lower-right bracket. Frame + check -- the whole product in one
@@ -30,11 +31,28 @@ from framecheck.app.ui.theme import Color  # noqa: E402
 
 SIZES = (16, 24, 32, 48, 64, 128, 256)
 
+# macOS icon entries: the pixel size of each, and the ICNS type that holds a
+# PNG of that size. This is the set `iconutil` writes from a standard iconset
+# (16, 32, 128, 256 and 512 points, each at 1x and 2x).
+ICNS_TYPES = (
+    (16, b"icp4"),
+    (32, b"icp5"),
+    (32, b"ic11"),  # 16 @2x
+    (64, b"icp6"),
+    (64, b"ic12"),  # 32 @2x
+    (128, b"ic07"),
+    (256, b"ic08"),
+    (256, b"ic13"),  # 128 @2x
+    (512, b"ic09"),
+    (512, b"ic14"),  # 256 @2x
+    (1024, b"ic10"),  # 512 @2x
+)
+
 BACKGROUND = QColor(Color.ACCENT)
 MARK = QColor("#ffffff")
 
 
-def draw_icon(size: int) -> QImage:
+def draw_icon(size: int, macos: bool = False) -> QImage:
     image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
     image.fill(Qt.transparent)
 
@@ -42,9 +60,16 @@ def draw_icon(size: int) -> QImage:
     painter.setRenderHint(QPainter.Antialiasing, True)
 
     s = float(size)
-    # Rounded square, proportioned like a Windows 11 app tile.
-    inset = s * 0.045
-    radius = s * 0.22
+    if macos:
+        # macOS app icons sit on a grid with clear space around the tile
+        # (about 10% each side at 1024) and a squircle-ish corner; a tile that
+        # fills the canvas looks oversized next to every other Dock icon.
+        inset = s * 0.10
+        radius = (s - 2 * inset) * 0.225
+    else:
+        # Rounded square, proportioned like a Windows 11 app tile.
+        inset = s * 0.045
+        radius = s * 0.22
     painter.setPen(Qt.NoPen)
     painter.setBrush(BACKGROUND)
     painter.drawRoundedRect(QRectF(inset, inset, s - 2 * inset, s - 2 * inset), radius, radius)
@@ -108,7 +133,42 @@ def main() -> int:
     png_path = assets / "framecheck.png"
     draw_icon(512).save(str(png_path))
     print(f"wrote {png_path} (512)")
+
+    icns_path = assets / "framecheck.icns"
+    write_icns([(kind, draw_icon(size, macos=True)) for size, kind in ICNS_TYPES], icns_path)
+    print(f"wrote {icns_path} ({', '.join(str(s) for s, _ in ICNS_TYPES)})")
     return 0
+
+
+def png_bytes(image: QImage) -> bytes:
+    from PySide6.QtCore import QBuffer
+
+    # QBuffer() with no argument owns its storage. Passing a temporary
+    # QByteArray instead lets Python collect it while Qt still holds the
+    # pointer, which segfaults.
+    buffer = QBuffer()
+    buffer.open(QBuffer.WriteOnly)
+    image.save(buffer, "PNG")
+    data = bytes(buffer.data())
+    buffer.close()
+    return data
+
+
+def write_icns(entries: list[tuple[bytes, QImage]], path: Path) -> None:
+    """Write a macOS .icns holding PNG-compressed entries.
+
+    Written by hand so the icon can be regenerated on any platform:
+    `iconutil` exists only on macOS. The format is a header followed by
+    (type, length, data) records, and every type used here has taken PNG
+    data since Mac OS X 10.7.
+    """
+    import struct
+
+    body = b""
+    for kind, image in entries:
+        payload = png_bytes(image)
+        body += kind + struct.pack(">I", 8 + len(payload)) + payload
+    path.write_bytes(b"icns" + struct.pack(">I", 8 + len(body)) + body)
 
 
 def write_ico(images: list[QImage], path: Path) -> None:
@@ -121,18 +181,7 @@ def write_ico(images: list[QImage], path: Path) -> None:
     import struct
     from io import BytesIO
 
-    from PySide6.QtCore import QBuffer
-
-    frames: list[tuple[int, bytes]] = []
-    for image in images:
-        # QBuffer() with no argument owns its storage. Passing a temporary
-        # QByteArray instead lets Python collect it while Qt still holds the
-        # pointer, which segfaults.
-        buffer = QBuffer()
-        buffer.open(QBuffer.WriteOnly)
-        image.save(buffer, "PNG")
-        frames.append((image.width(), bytes(buffer.data())))
-        buffer.close()
+    frames = [(image.width(), png_bytes(image)) for image in images]
 
     out = BytesIO()
     out.write(struct.pack("<HHH", 0, 1, len(frames)))  # reserved, type=icon, count

@@ -1,19 +1,28 @@
-"""Download the runtime binaries Framecheck needs into vendor/.
+"""Put the runtime binaries Framecheck needs into vendor/.
 
 These are NOT committed to the repository. Run once after cloning:
 
     python tools/fetch_binaries.py
 
-Provenance of every download is recorded in vendor/PROVENANCE.json so the
+Windows: downloads a static FFmpeg (gyan.dev) and libmpv (shinchiro).
+
+macOS: there is no static libmpv to download, so the binaries come from
+Homebrew -- `brew install mpv` (which brings FFmpeg with it) -- and are copied
+into vendor/ from there. They depend on Homebrew's shared libraries by absolute
+path, which is fine in a checkout; the PyInstaller build collects every one of
+those libraries into the app bundle and rewrites the paths.
+
+Provenance of what was fetched is recorded in vendor/PROVENANCE.json so the
 build is reproducible and the third-party notices stay honest.
 
-Licensing note: the FFmpeg and libmpv builds fetched here are GPL builds
-(they include libx264). See THIRD_PARTY_NOTICES.md.
+Licensing note: the FFmpeg and libmpv builds used here are GPL builds (they
+include libx264). See THIRD_PARTY_NOTICES.md.
 """
 
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -24,6 +33,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / "vendor"
+
+# What python-mpv looks for, per platform. Kept in step with
+# framecheck/app/services/binaries.py, which is not imported here so this
+# script stays runnable from a bare checkout.
+LIBMPV_NAME = "libmpv.dylib" if sys.platform == "darwin" else "libmpv-2.dll"
 
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 MPV_RELEASES = "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
@@ -152,13 +166,128 @@ def fetch_libmpv(provenance: dict) -> None:
     }
 
 
+# -- macOS: Homebrew ---------------------------------------------------------
+
+
+def _brew_prefix() -> Path | None:
+    found = shutil.which("brew")
+    if found is None:
+        for candidate in (Path("/opt/homebrew/bin/brew"), Path("/usr/local/bin/brew")):
+            if candidate.is_file():
+                found = str(candidate)
+                break
+    if found is None:
+        return None
+    result = subprocess.run([found, "--prefix"], capture_output=True, text=True)
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def _brew_formula_info(prefix: Path, name: str) -> dict:
+    """Version and upstream source of an installed formula, for provenance."""
+    brew = prefix / "bin" / "brew"
+    try:
+        result = subprocess.run(
+            [str(brew), "info", "--json=v2", name], capture_output=True, text=True, check=True
+        )
+        formula = json.loads(result.stdout)["formulae"][0]
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, IndexError):
+        return {}
+    installed = formula.get("installed") or [{}]
+    return {
+        "formula": formula.get("full_name", name),
+        "version": installed[0].get("version") or formula.get("versions", {}).get("stable"),
+        "upstream_source": formula.get("urls", {}).get("stable", {}).get("url"),
+        "tap_git_head": formula.get("tap_git_head"),
+    }
+
+
+def _copy_real_file(source: Path, dest: Path) -> None:
+    # Homebrew's bin/ and lib/ entries are symlinks into the Cellar; copy the
+    # file itself, and keep its mode so executables stay executable.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source.resolve(), dest)
+
+
+def _keg_licences(prefix: Path, formula: str) -> list[Path]:
+    keg = (prefix / "opt" / formula).resolve()
+    return sorted(
+        p for p in keg.iterdir() if p.is_file() and p.name.upper().startswith(("LICENSE", "COPYING"))
+    ) if keg.is_dir() else []
+
+
+def fetch_macos(provenance: dict) -> int:
+    prefix = _brew_prefix()
+    if prefix is None:
+        print(
+            "Homebrew not found. Install it from https://brew.sh, then:\n"
+            "    brew install mpv\n"
+            "and run this script again.",
+            file=sys.stderr,
+        )
+        return 1
+
+    wanted = {
+        "ffmpeg": prefix / "bin" / "ffmpeg",
+        "ffprobe": prefix / "bin" / "ffprobe",
+        LIBMPV_NAME: prefix / "lib" / "libmpv.dylib",
+    }
+    missing = [name for name, path in wanted.items() if not path.exists()]
+    if missing:
+        print(
+            f"Not found under {prefix}: {', '.join(missing)}. Run:\n"
+            "    brew install mpv\n"
+            "(mpv depends on ffmpeg, so that installs both.)",
+            file=sys.stderr,
+        )
+        return 1
+
+    machine = platform.machine()
+    macos = platform.mac_ver()[0]
+    print(f"Homebrew at {prefix} ({machine}, macOS {macos})")
+
+    ffmpeg_dir = VENDOR / "ffmpeg"
+    for name in ("ffmpeg", "ffprobe"):
+        _copy_real_file(wanted[name], ffmpeg_dir / name)
+        print(f"  copied {name}")
+    for licence in _keg_licences(prefix, "ffmpeg"):
+        shutil.copy2(licence, ffmpeg_dir / f"FFMPEG_{licence.name}")
+
+    _copy_real_file(wanted[LIBMPV_NAME], VENDOR / "playback" / LIBMPV_NAME)
+    print(f"  copied {LIBMPV_NAME}")
+
+    common = {"source": "homebrew", "prefix": str(prefix), "arch": machine, "macos": macos}
+    provenance["ffmpeg"] = {
+        **common,
+        **_brew_formula_info(prefix, "ffmpeg"),
+        "license": "GPL-3.0-or-later (Homebrew build; includes libx264)",
+    }
+    provenance["libmpv"] = {
+        **common,
+        **_brew_formula_info(prefix, "mpv"),
+        "license": "GPL-2.0-or-later (build links GPL FFmpeg)",
+    }
+    return 0
+
+
 def main() -> int:
     VENDOR.mkdir(exist_ok=True)
     provenance_path = VENDOR / "PROVENANCE.json"
     provenance = json.loads(provenance_path.read_text()) if provenance_path.exists() else {}
 
-    fetch_ffmpeg(provenance)
-    fetch_libmpv(provenance)
+    if sys.platform == "darwin":
+        status = fetch_macos(provenance)
+        if status:
+            return status
+    elif sys.platform == "win32":
+        fetch_ffmpeg(provenance)
+        fetch_libmpv(provenance)
+    else:
+        print(
+            "No bundled binaries are fetched on this platform. Install ffmpeg and "
+            "libmpv from your distribution; Framecheck falls back to them on PATH.",
+            file=sys.stderr,
+        )
+        return 1
 
     provenance_path.write_text(json.dumps(provenance, indent=2))
     print(f"\nWrote {provenance_path}")

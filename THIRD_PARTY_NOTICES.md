@@ -6,8 +6,9 @@ licence that can cover the combined work, for the reasons set out at the bottom
 of this file.
 
 **No third-party binaries are committed to this repository.** FFmpeg, ffprobe
-and libmpv are downloaded at build time by `python tools/fetch_binaries.py`,
-which records the exact URL and recorded licence of every download in
+and libmpv are fetched at build time by `python tools/fetch_binaries.py` —
+downloaded on Windows, copied from Homebrew on macOS — which records the exact
+URL or formula version and the recorded licence of each in
 `vendor/PROVENANCE.json`. Python dependencies are installed from PyPI by pip.
 If you redistribute a Framecheck build, the obligations below attach to *your*
 distribution, because it is your build that contains the binaries.
@@ -19,7 +20,7 @@ distribution, because it is your build that contains the binaries.
 | | |
 | --- | --- |
 | **Used for** | Media inspection (`ffprobe`) and, from Milestone 2 onward, trimming and transcoding (`ffmpeg`). |
-| **Upstream** | <https://ffmpeg.org/> — Windows build from <https://www.gyan.dev/ffmpeg/builds/> (`ffmpeg-release-essentials.zip`) |
+| **Upstream** | <https://ffmpeg.org/> — Windows build from <https://www.gyan.dev/ffmpeg/builds/> (`ffmpeg-release-essentials.zip`); macOS build from the Homebrew `ffmpeg` formula (<https://formulae.brew.sh/formula/ffmpeg>), version recorded in `vendor/PROVENANCE.json` |
 | **Licence** | **GPL-2.0-or-later**; the build fetched here is a **GPL build** recorded in `vendor/PROVENANCE.json` as `GPL-3.0-or-later (build includes libx264)`, because it is configured with `--enable-gpl` and links **libx264** (GPL-2.0-or-later, <https://www.videolan.org/developers/x264.html>). |
 | **Obligation** | The whole distribution must be GPL-licensed. Retain FFmpeg's copyright notices and licence files (`fetch_binaries.py` extracts them alongside the executables into `vendor/ffmpeg/`), and make the complete corresponding source of the FFmpeg build available to anyone who receives a binary — either by shipping it, or by a written offer valid for three years, or by pointing at the build's own published sources. |
 
@@ -30,8 +31,8 @@ Framecheck, so the GPL build is not optional.
 
 | | |
 | --- | --- |
-| **Used for** | Embedded video playback — decode, scrubbing and frame stepping (`vendor/playback/libmpv-2.dll`). |
-| **Upstream** | <https://mpv.io/> — Windows build from <https://github.com/shinchiro/mpv-winbuild-cmake> (release `20260903`, asset `mpv-dev-x86_64-20260903-git-69e63f425a.7z`) |
+| **Used for** | Embedded video playback — decode, scrubbing and frame stepping (`vendor/playback/libmpv-2.dll` on Windows, `vendor/playback/libmpv.dylib` on macOS). |
+| **Upstream** | <https://mpv.io/> — Windows build from <https://github.com/shinchiro/mpv-winbuild-cmake> (release `20260903`, asset `mpv-dev-x86_64-20260903-git-69e63f425a.7z`); macOS build from the Homebrew `mpv` formula (<https://formulae.brew.sh/formula/mpv>), version recorded in `vendor/PROVENANCE.json` |
 | **Licence** | mpv itself is LGPL-2.1-or-later in its default configuration, but this build links the **GPL FFmpeg** above, so it must be treated as **GPL-2.0-or-later**. `vendor/PROVENANCE.json` records it as `GPL-2.0-or-later (build links GPL FFmpeg)`. |
 | **Obligation** | Same as FFmpeg: GPL terms for the distribution, notices retained, and complete corresponding source of the libmpv build available to recipients. The exact release tag and asset URL are recorded in `vendor/PROVENANCE.json` precisely so that source can be identified. |
 
@@ -94,8 +95,9 @@ writing:
 
 | Component | Upstream build | Source |
 | --- | --- | --- |
-| FFmpeg | gyan.dev release-essentials — <https://www.gyan.dev/ffmpeg/builds/> | <https://git.ffmpeg.org/ffmpeg.git> and the build recipes at <https://github.com/GyanD/codexffmpeg> |
-| libmpv | shinchiro mpv-winbuild-cmake, release tag in `PROVENANCE.json` — <https://github.com/shinchiro/mpv-winbuild-cmake/releases> | <https://github.com/mpv-player/mpv> and the build scripts at <https://github.com/shinchiro/mpv-winbuild-cmake> |
+| FFmpeg (Windows) | gyan.dev release-essentials — <https://www.gyan.dev/ffmpeg/builds/> | <https://git.ffmpeg.org/ffmpeg.git> and the build recipes at <https://github.com/GyanD/codexffmpeg> |
+| libmpv (Windows) | shinchiro mpv-winbuild-cmake, release tag in `PROVENANCE.json` — <https://github.com/shinchiro/mpv-winbuild-cmake/releases> | <https://github.com/mpv-player/mpv> and the build scripts at <https://github.com/shinchiro/mpv-winbuild-cmake> |
+| FFmpeg and libmpv (macOS) | Homebrew `ffmpeg` and `mpv` formulae, versions and tap revision in `PROVENANCE.json` — <https://formulae.brew.sh/> | the upstream release tarballs named in the formulae (`upstream_source` in `PROVENANCE.json`) and the build recipes at <https://github.com/Homebrew/homebrew-core>; the macOS app bundle also carries the shared libraries those builds link (libass, libplacebo, dav1d and others), each redistributed unchanged under its own licence as recorded by Homebrew |
 | libx264 (inside FFmpeg) | as built by the above | <https://code.videolan.org/videolan/x264> |
 
 **Written offer.** For three years from the date you received a Framecheck
@@ -105,9 +107,10 @@ copy's `vendor/PROVENANCE.json` — on a physical medium or via a download link,
 for no more than the cost of distribution. Open an issue on the project's
 repository to request it.
 
-**Qt / PySide6 (LGPL-3.0).** The distribution ships Qt as loose DLLs under
-`PySide6/` rather than a single archive, so a recipient can replace them with
-their own build of Qt. That, together with the licence text in `licenses/`, is
+**Qt / PySide6 (LGPL-3.0).** The distribution ships Qt as loose libraries
+(DLLs under `PySide6/` on Windows, frameworks under `Contents/Frameworks` in
+the macOS bundle) rather than a single archive, so a recipient can replace
+them with their own build of Qt. That, together with the licence text in `licenses/`, is
 what LGPL-3.0 §4(d) asks for.
 
 Licence texts for every bundled component are in the `licenses/` folder of the

@@ -52,32 +52,73 @@ def ffmpeg_path() -> Path | None:
     return _find_executable("ffmpeg", "ffmpeg")
 
 
+def libmpv_filenames() -> tuple[str, ...]:
+    """The file names python-mpv can find libmpv under, on this platform.
+
+    Windows: python-mpv asks for `mpv-2.dll` or `libmpv-2.dll` by name.
+    macOS: it asks ctypes.util.find_library("mpv"), which looks for
+    `libmpv.dylib` first -- so that is the name the bundled copy must carry,
+    whatever Homebrew called it.
+    Elsewhere: the usual soname.
+    """
+    if sys.platform == "win32":
+        return ("libmpv-2.dll", "mpv-2.dll")
+    if sys.platform == "darwin":
+        return ("libmpv.dylib", "libmpv.2.dylib")
+    return ("libmpv.so.2", "libmpv.so")
+
+
+def libmpv_filename() -> str:
+    """The name `tools/fetch_binaries.py` writes the bundled libmpv under."""
+    return libmpv_filenames()[0]
+
+
 @lru_cache(maxsize=None)
 def libmpv_dir() -> Path | None:
-    """Directory holding libmpv-2.dll, or None if it is not bundled."""
+    """Directory holding the bundled libmpv, or None if it is not bundled."""
     candidate = vendor_dir() / "playback"
-    if (candidate / "libmpv-2.dll").is_file() or (candidate / "mpv-2.dll").is_file():
+    if any((candidate / name).is_file() for name in libmpv_filenames()):
         return candidate
     return None
 
 
 def register_libmpv_search_path() -> bool:
-    """Make libmpv-2.dll loadable by the `mpv` module.
+    """Make the bundled libmpv loadable by the `mpv` module.
 
-    Must run before `import mpv`. python-mpv uses ctypes.CDLL, which on Windows
-    searches the DLL directories, not sys.path -- so a bundled DLL is invisible
-    unless we add its directory explicitly.
+    Must run before `import mpv`. python-mpv uses ctypes, which never looks at
+    sys.path, so the bundled library is invisible unless its directory is put
+    where the loader looks:
+
+    Windows: `os.add_dll_directory`, plus PATH, which is what python-mpv's own
+    `find_library` walks.
+    macOS: `ctypes.util.find_library` reads DYLD_LIBRARY_PATH from
+    `os.environ` at call time, so setting it here -- inside the process, not
+    at launch, where the system strips it -- is enough.
+    Linux: `find_library` consults ldconfig, not environment variables. A
+    bundled copy is found through LD_LIBRARY_PATH only when the platform
+    loader gets it at launch; a system libmpv works regardless.
     """
     directory = libmpv_dir()
     if directory is None:
         return False
-    if hasattr(os, "add_dll_directory"):
-        try:
-            os.add_dll_directory(str(directory))
-        except OSError:
-            return False
-    os.environ["PATH"] = f"{directory}{os.pathsep}" + os.environ.get("PATH", "")
+    if sys.platform == "win32":
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(directory))
+            except OSError:
+                return False
+        _prepend_env_path("PATH", directory)
+    elif sys.platform == "darwin":
+        _prepend_env_path("DYLD_LIBRARY_PATH", directory)
+    else:
+        _prepend_env_path("LD_LIBRARY_PATH", directory)
     return True
+
+
+def _prepend_env_path(variable: str, directory: Path) -> None:
+    current = os.environ.get(variable, "")
+    entries = [str(directory)] + [e for e in current.split(os.pathsep) if e and e != str(directory)]
+    os.environ[variable] = os.pathsep.join(entries)
 
 
 class ToolNotFoundError(RuntimeError):

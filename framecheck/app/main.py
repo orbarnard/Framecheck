@@ -12,9 +12,10 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
+from .media.playback import EMBEDS_BY_WINDOW_ID
 from .services.logging_service import configure_logging
 from .services.settings import Settings
 from .utils.win_chrome import set_app_user_model_id
@@ -31,11 +32,29 @@ def application_icon() -> "QIcon | None":
 
     from .services.binaries import resource_root
 
-    path = resource_root() / "assets" / "framecheck.ico"
-    if not path.is_file():
-        log.warning("application icon missing: %s", path)
-        return None
-    return QIcon(str(path))
+    assets = resource_root() / "assets"
+    for name in ("framecheck.ico", "framecheck.png"):
+        path = assets / name
+        if path.is_file():
+            return QIcon(str(path))
+    log.warning("application icon missing in %s", assets)
+    return None
+
+
+def configure_surface_format() -> None:
+    """Ask for the OpenGL context libmpv's renderer needs. Before QApplication.
+
+    libmpv renders through a QOpenGLWidget on macOS and Linux, and wants a
+    modern context: macOS in particular offers only OpenGL 2.1 unless a core
+    profile is requested, and it has to be requested before Qt starts.
+    """
+    if EMBEDS_BY_WINDOW_ID:
+        return
+    surface_format = QSurfaceFormat()
+    surface_format.setVersion(3, 3)
+    surface_format.setProfile(QSurfaceFormat.CoreProfile)
+    surface_format.setSwapInterval(1)
+    QSurfaceFormat.setDefaultFormat(surface_format)
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -52,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     # Before any window exists: this is what makes the taskbar show Framecheck
     # and its icon rather than grouping the app under python.exe.
     set_app_user_model_id()
+
+    configure_surface_format()
 
     QApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)
     app = QApplication(sys.argv)

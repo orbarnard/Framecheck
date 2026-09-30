@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for a signed, notarised Framecheck.app (tools/build_mac.py
+  with --sign). Only applied when a Developer ID identity is given; an ad-hoc
+  build has no hardened runtime and needs none of this.
+
+  Every one of these is what a Python app under the hardened runtime needs:
+  the interpreter JIT-free but ctypes and Qt still load code the runtime would
+  otherwise refuse.
+-->
+<plist version="1.0">
+<dict>
+    <!-- ctypes (python-mpv) and PyInstaller's bootloader map executable memory. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- The bundled Qt and Homebrew libraries are signed with our identity, not Apple's;
+         library validation would refuse to load them from python-mpv's ctypes. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Framecheck sets DYLD_LIBRARY_PATH inside its own process so python-mpv
+         finds the bundled libmpv. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

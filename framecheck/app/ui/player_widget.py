@@ -13,8 +13,9 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPaintEvent, QPen
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QOpenGLContext, QPainter, QPainterPath, QPaintEvent, QPen
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -234,6 +235,123 @@ class VideoSurface(QWidget):
             self.clicked.emit()
 
 
+class GLVideoSurface(QOpenGLWidget):
+    """The OpenGL widget libmpv draws into through the render API.
+
+    Used where mpv cannot adopt a native window (macOS, Linux). Each frame is
+    rendered straight into this widget's framebuffer from paintGL; the engine's
+    `render_update` signal, raised on mpv's thread, schedules the next paint.
+    """
+
+    clicked = Signal()
+    # The GL context exists. Emitted from initializeGL, with the context
+    # current, which is the one moment the engine can create its renderer.
+    ready = Signal()
+
+    def __init__(self, engine: PlaybackEngine, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._engine = engine
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setMinimumSize(320, 180)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # The signal is emitted from mpv's own (non-Qt) thread, so the
+        # connection is queued: the repaint is scheduled on the GUI thread.
+        engine.render_update.connect(self._schedule_repaint, Qt.QueuedConnection)
+
+    def _schedule_repaint(self) -> None:
+        self.update()
+
+    def initializeGL(self) -> None:
+        # mpv holds GL objects in this context; they have to go before Qt
+        # destroys it (reparenting, or the window closing).
+        self.context().aboutToBeDestroyed.connect(self._release_renderer)
+        # The renderer is created in this context next; start it from a
+        # clean error state (see paintGL).
+        self._drain_gl_errors()
+        self.ready.emit()
+
+    def get_proc_address(self, name: bytes) -> int:
+        """Resolve a GL function in the current context, for mpv's loader."""
+        context = QOpenGLContext.currentContext()
+        if context is None:
+            return 0
+        address = context.getProcAddress(QByteArray(name))
+        try:
+            return int(address) if address is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def paintGL(self) -> None:
+        # The framebuffer is in device pixels; on a Retina display that is
+        # twice the widget's logical size in each direction.
+        ratio = self.devicePixelRatioF()
+        width = int(round(self.width() * ratio))
+        height = int(round(self.height() * ratio))
+        fbo = self.defaultFramebufferObject()
+        # Qt's rendering backend can leave an OpenGL error flagged from its
+        # own work (seen on every paint under Mesa). GL errors are sticky, and
+        # mpv reads the flag after creating each texture and logs whatever it
+        # finds as its own. Drain the queue before mpv gets the context, so
+        # the log tells the truth and mpv starts every frame from a clean
+        # state, as its render API asks.
+        self._drain_gl_errors()
+        self._engine.render(fbo, width, height)
+        gl = self._gl_functions()
+        if gl is not None:
+            # mpv leaves framebuffer 0 bound when it is done. Qt composites
+            # this widget from its own framebuffer and expects to find it
+            # still bound on return, so put it back.
+            gl.bind_framebuffer(self._GL_FRAMEBUFFER, int(fbo))
+
+    _GL_FRAMEBUFFER = 0x8D40
+
+    def _drain_gl_errors(self) -> None:
+        gl = self._gl_functions()
+        if gl is None:
+            return
+        for _ in range(8):
+            if gl.get_error() == 0:
+                break
+
+    def _gl_functions(self):
+        """The two GL entry points paintGL needs, resolved once per context.
+
+        Fetched through the same get_proc_address mpv uses rather than a GL
+        binding module, so playback has no dependency the rest of the app
+        lacks. None if either cannot be resolved.
+        """
+        cached = getattr(self, "_gl", None)
+        if cached is not None:
+            return cached or None
+        import ctypes
+
+        class _Functions:
+            pass
+
+        gl = _Functions()
+        try:
+            gl.get_error = ctypes.CFUNCTYPE(ctypes.c_uint)(self.get_proc_address(b"glGetError"))
+            gl.bind_framebuffer = ctypes.CFUNCTYPE(None, ctypes.c_uint, ctypes.c_uint)(
+                self.get_proc_address(b"glBindFramebuffer")
+            )
+        except (TypeError, ValueError):  # a null address: the function is missing
+            self._gl = False
+            return None
+        self._gl = gl
+        return gl
+
+    def _release_renderer(self) -> None:
+        try:
+            self.makeCurrent()
+        except Exception:  # the context may already be half gone
+            pass
+        self._engine.release_render_context()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
 class PlayerWidget(QWidget):
     """Video surface plus transport. Owns the playback engine."""
 
@@ -249,6 +367,9 @@ class PlayerWidget(QWidget):
         super().__init__(parent)
         self.engine = PlaybackEngine(self)
         self._attached = False
+        # A load requested before the renderer exists (a file on the command
+        # line, opened before the first paint). Replayed once it does.
+        self._pending_load: tuple[Path, FrameRate | None] | None = None
         self._resume_after_scrub = False
         self._muted = False
         self._trim: TrimRange | None = None
@@ -260,7 +381,11 @@ class PlayerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.surface = VideoSurface(self)
+        if self.engine.uses_render_api:
+            self.surface = GLVideoSurface(self.engine, self)
+            self.surface.ready.connect(self._on_surface_ready)
+        else:
+            self.surface = VideoSurface(self)
         self.surface.clicked.connect(self.toggle_play)
 
         # Overlay for the states where there is no picture to show. It is an
@@ -377,19 +502,62 @@ class PlayerWidget(QWidget):
 
         Deferred rather than done in __init__ because winId() must resolve to a
         real HWND, which only happens after the widget is realised.
+
+        With the render API the mpv instance can only be created once the GL
+        widget has a context, which Qt hands out on its first paint. Until
+        then this returns True -- the engine is usable, just not yet -- and
+        `_on_surface_ready` finishes the job, replaying any pending load.
         """
         if self._attached:
             return True
         if not self.engine.available:
             self.show_message(self.engine.unavailable_reason)
             return False
+        if self.engine.uses_render_api:
+            if self.surface.isValid():
+                # Late: the widget initialised before anyone asked. Outside
+                # Qt's own paint sequence, so the context is ours to bind.
+                self.surface.makeCurrent()
+                try:
+                    self._on_surface_ready()
+                finally:
+                    self.surface.doneCurrent()
+            return True
         self._attached = self.engine.attach(int(self.surface.winId()))
         if self._attached:
             self.show_message("No file loaded")
         return self._attached
 
+    def _on_surface_ready(self) -> None:
+        """The GL context exists and is current: create the renderer in it.
+
+        Normally reached from the widget's initializeGL, where Qt has already
+        made the context current and goes on to resize and paint with it.
+        Releasing it here (doneCurrent) would pull the context out from under
+        those calls, so this neither binds nor releases anything.
+        """
+        if self._attached or not self.engine.available:
+            return
+        self._attached = self.engine.attach_render(self.surface.get_proc_address)
+        if not self._attached:
+            return
+        pending, self._pending_load = self._pending_load, None
+        if pending is not None:
+            self.engine.load(*pending)
+        else:
+            self.show_message("No file loaded")
+
     def shutdown(self) -> None:
-        self.engine.shutdown()
+        if self.engine.uses_render_api and self.surface.isValid():
+            # mpv's GL objects belong to the widget's context; the engine
+            # frees them on the way down, so the context has to be current.
+            self.surface.makeCurrent()
+            try:
+                self.engine.shutdown()
+            finally:
+                self.surface.doneCurrent()
+        else:
+            self.engine.shutdown()
 
     # -- media ------------------------------------------------------------
 
@@ -403,7 +571,10 @@ class PlayerWidget(QWidget):
         self.timecode.clear()
         if rate is not None:
             self.timeline.set_rate(rate)
-        self.engine.load(path, rate)
+        if self._attached:
+            self.engine.load(path, rate)
+        else:
+            self._pending_load = (Path(path), rate)
         self.set_controls_enabled(True)
 
     def set_frame_rate(self, rate: FrameRate) -> None:
@@ -412,6 +583,7 @@ class PlayerWidget(QWidget):
         self.timeline.set_rate(rate)
 
     def clear(self) -> None:
+        self._pending_load = None
         self.engine.unload()
         self._cancel_cut_modes()
         self._trim = None
