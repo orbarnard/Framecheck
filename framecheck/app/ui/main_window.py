@@ -142,8 +142,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1180, 720)
         self.setAcceptDrops(True)
         # Frameless so the menus can share the caption strip. Every native
-        # caption behaviour is handed back to Windows in nativeEvent().
-        if sys.platform == "win32":
+        # caption behaviour is handed back to Windows in nativeEvent(). On
+        # macOS the window keeps its own title bar and the menus go to the
+        # system menu bar, so the strip is not shown at all.
+        self._frameless = sys.platform == "win32"
+        if self._frameless:
             self.setWindowFlag(Qt.FramelessWindowHint, True)
 
         self._build_ui()
@@ -175,6 +178,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_title_bar())
+        if not self._frameless:
+            self.title_bar.hide()
         layout.addWidget(self._build_top_bar())
 
         self.splitter = QSplitter(Qt.Horizontal, central)
@@ -321,7 +326,7 @@ class MainWindow(QMainWindow):
             self.title_bar.set_maximized(self.isMaximized())
             # A maximised frameless window would otherwise hang the resize
             # border off every edge of the screen.
-            margin = resize_border_thickness() if self.isMaximized() else 0
+            margin = resize_border_thickness() if self._frameless and self.isMaximized() else 0
             self.centralWidget().setContentsMargins(margin, margin, margin, margin)
 
     def nativeEvent(self, event_type, message):  # noqa: ANN001 - Qt signature
@@ -391,12 +396,18 @@ class MainWindow(QMainWindow):
         layout.setSpacing(Metrics.GUTTER_SM)
 
         # The menu bar lives in the title bar, not here. QMainWindow is never
-        # asked for its own menu bar, so it reserves no space for one.
+        # asked for its own menu bar, so it reserves no space for one. On
+        # macOS it is the other way round: the menus belong in the system
+        # menu bar, where Qt puts a native QMainWindow menu bar.
         self.menu_bar = QMenuBar(self)
         self.menu_bar.setObjectName("AppMenuBar")
-        self.menu_bar.setNativeMenuBar(False)
-        self.menu_bar.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        self.title_bar.set_menu_bar(self.menu_bar)
+        if sys.platform == "darwin":
+            self.menu_bar.setNativeMenuBar(True)
+            self.setMenuBar(self.menu_bar)
+        else:
+            self.menu_bar.setNativeMenuBar(False)
+            self.menu_bar.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+            self.title_bar.set_menu_bar(self.menu_bar)
 
         self.current_file_label = QLabel("", bar)
         self.current_file_label.setObjectName("CurrentFileLabel")
@@ -459,7 +470,9 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Conform && Export…", QKeySequence("Ctrl+E"), self.start_export)
         file_menu.addSeparator()
         self._add_action(file_menu, "Close File", QKeySequence("Ctrl+W"), self.close_current_file)
-        self._add_action(file_menu, "Exit", QKeySequence("Alt+F4"), self.close)
+        # Qt files "Exit" under the application menu on macOS, as Quit.
+        quit_keys = QKeySequence.Quit if sys.platform == "darwin" else QKeySequence("Alt+F4")
+        self._add_action(file_menu, "Exit", quit_keys, self.close)
 
         playback_menu = menubar.addMenu("&Playback")
         self._add_action(playback_menu, "Play / Pause", QKeySequence(Qt.Key_Space), self.player.toggle_play)

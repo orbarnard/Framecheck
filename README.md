@@ -2,8 +2,8 @@
 
 **Video, to spec.**
 
-Framecheck is a Windows desktop app for checking that a video file actually
-matches the technical specification of the place it is going. You open a file or
+Framecheck is a desktop app for Windows and macOS that checks whether a video
+file actually matches the technical specification of the place it is going. You open a file or
 a folder, Framecheck inspects it with ffprobe, plays it back frame-accurately,
 checks it against a delivery profile, and exports a conforming version — then
 re-reads that export and validates it too. Everything runs locally. Your source
@@ -185,16 +185,53 @@ with the same `id` as a built-in replaces it. Use **Help ▸ Reload Profiles** t
 pick up edits without restarting. Updating from 0.1.0, setup moves any spec
 you edited inside the install folder into that folder for you.
 
+## Installing
+
+**Windows:** download `FramecheckSetup-<version>.exe` from the latest release
+and run it. It installs per-user (no administrator prompt) and puts Framecheck
+in the Start menu. Run a newer setup over an older install to upgrade.
+
+**macOS:** download the `.dmg` for your Mac — `macos-arm64` for Apple Silicon,
+`macos-x86_64` for Intel — open it, and drag Framecheck to Applications.
+
+The Mac build is not signed with an Apple Developer ID, so the first launch is
+stopped by Gatekeeper with "Apple could not verify Framecheck". It is not
+damaged; macOS says that about every app from outside the App Store that is not
+notarised. To open it once, after which macOS remembers:
+
+- **macOS 15 and later:** double-click Framecheck, click *Done*, then go to
+  *System Settings ▸ Privacy & Security*, scroll to *Security* and click *Open
+  Anyway*.
+- **macOS 13 and 14:** right-click Framecheck in Applications, choose *Open*,
+  then *Open* again.
+
+If it says the app "is damaged", the browser quarantined the download; run
+`xattr -dr com.apple.quarantine /Applications/Framecheck.app` in Terminal and
+open it again. The same instructions ship inside the disk image as
+*READ ME FIRST.txt*.
+
 ## Releasing
 
-The version lives only in `framecheck/__init__.py`. Bump it there, then
-`python tools/build_exe.py --installer`; the exe, the installer and its
-filename all follow. Users run the new setup over the old install: no
-uninstall, settings and custom specs kept.
+The version lives only in `framecheck/__init__.py`. Bump it there and every
+artefact follows: the exe, the installer, the app bundle, the disk images and
+their filenames.
+
+- Windows: `python tools/build_exe.py --installer`, on Windows.
+- macOS: `python tools/build_mac.py --dmg`, on a Mac of the architecture you
+  are shipping for.
+- Or push a `v<version>` tag: the *Release packages* workflow
+  (`.github/workflows/release.yml`) builds all three on GitHub's runners and
+  attaches them to the release. Run it by hand from the Actions tab to get the
+  packages as workflow artifacts without cutting a release.
+
+Users run the new Windows setup over the old install, or drag the new app over
+the old one on a Mac: no uninstall, settings and custom specs kept.
 
 ## Getting started
 
-Requires Windows and Python 3.11 or newer (developed on 3.14).
+Requires Python 3.11 or newer (developed on 3.14) on Windows or macOS.
+
+Windows:
 
 ```powershell
 git clone <repository-url> framecheck
@@ -206,11 +243,30 @@ python tools/fetch_binaries.py
 python -m framecheck.app.main
 ```
 
-`tools/fetch_binaries.py` downloads FFmpeg, ffprobe and libmpv into `vendor/`
-and records exactly what it fetched in `vendor/PROVENANCE.json`. These binaries
-are not committed to the repository, so this step is required. Extracting the
-libmpv archive needs 7-Zip, or the `tar.exe` that ships with Windows 10 and
-later.
+macOS, with [Homebrew](https://brew.sh) installed:
+
+```sh
+git clone <repository-url> framecheck
+cd framecheck
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+brew install mpv              # brings ffmpeg with it
+python tools/fetch_binaries.py
+python -m framecheck.app.main
+```
+
+`tools/fetch_binaries.py` puts FFmpeg, ffprobe and libmpv into `vendor/` and
+records exactly what it fetched in `vendor/PROVENANCE.json`. These binaries are
+not committed to the repository, so this step is required. On Windows it
+downloads them; extracting the libmpv archive needs 7-Zip, or the `tar.exe`
+that ships with Windows 10 and later. On macOS there is no static libmpv to
+download, so it copies Homebrew's `mpv` and `ffmpeg` and records their formula
+versions instead.
+
+To confirm that playback draws a picture on a new machine, run
+`python tools/check_playback.py` (it opens the real player off-screen, loads a
+test clip and prints PASS or FAIL).
 
 ## Keyboard shortcuts
 
@@ -267,6 +323,46 @@ Because it is a GUI build with no console, the proof that it works is the log at
 `%LOCALAPPDATA%\Framecheck\logs\framecheck.log`: it should show the startup
 line, `loaded 9 delivery profiles` (bundled specs found) and `mpv attached`
 (bundled libmpv loaded).
+
+## Building a macOS package
+
+```
+brew install mpv                   # once; ffmpeg comes with it
+python tools/fetch_binaries.py     # copies them into vendor/
+pip install pyinstaller
+python tools/build_mac.py --dmg    # dist/Framecheck.app and the .dmg
+```
+
+The result is `dist/Framecheck.app` and
+`dist/Framecheck-<version>-macos-<arch>.dmg`, a drag-to-Applications disk
+image. The build is for the Mac it runs on: the Homebrew libraries it bundles
+are single-architecture, so the Apple Silicon and Intel images are two builds.
+It runs on the macOS version it was built on and newer, for the same reason.
+
+The same `build/framecheck.spec` drives both platforms. The macOS differences:
+
+- `ffmpeg`, `ffprobe` and `libmpv.dylib` go in as PyInstaller **binaries**, not
+  data. Homebrew's builds depend on dozens of shared libraries by absolute
+  path; PyInstaller follows those, collects every one into
+  `Contents/Frameworks` and rewrites the load paths, which is what makes the
+  bundle self-contained.
+- The bundled libmpv is named `libmpv.dylib` because that is what python-mpv's
+  `find_library("mpv")` looks for, and Framecheck points it there through
+  `DYLD_LIBRARY_PATH` set inside its own process before `import mpv`.
+- Playback goes through mpv's **render API** into a `QOpenGLWidget`, not a
+  window handle: mpv dropped Cocoa window embedding in 0.37. The picture is
+  drawn by mpv into the widget's framebuffer on every paint. This is the part
+  most worth checking on a new machine; `python tools/check_playback.py` does
+  exactly that. If the player is ever black, try
+  `FRAMECHECK_GPU_DUMB_MODE=1 open -a Framecheck`, which switches mpv to its
+  single-pass renderer.
+- The bundle is ad-hoc signed unless `--sign` is given with a Developer ID
+  identity in `FRAMECHECK_CODESIGN_IDENTITY`; with Apple credentials in the
+  environment as well, `build_mac.py` notarises and staples the disk image.
+  See the script's docstring for the variables.
+
+The log is at `~/Library/Application Support/Framecheck/logs/framecheck.log`
+and should show `mpv attached through the OpenGL render API`.
 
 ## Licence
 

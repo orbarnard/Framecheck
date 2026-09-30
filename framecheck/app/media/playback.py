@@ -1,7 +1,16 @@
 """Embedded playback via libmpv.
 
-mpv renders into a native child window handle we hand it, on its own thread, so
-decoding never touches the Qt event loop.
+Two ways of getting mpv's picture on screen, chosen by platform:
+
+Windows: mpv renders into a native child window handle we hand it (`wid`), on
+its own thread, so decoding never touches the Qt event loop.
+
+macOS (and Linux): mpv has no window embedding there -- the Cocoa backend that
+took a `wid` was removed in mpv 0.37 -- so the render API is used instead. mpv
+draws each frame into the OpenGL framebuffer of a QOpenGLWidget when that widget
+paints, and asks for a repaint through `render_update` when a new frame is due.
+Decoding still happens on mpv's threads; only the final blit shares the GUI
+thread, as it must.
 
 State reaches the UI by polling from a Qt timer rather than by mpv property
 observers. Observer callbacks fire on mpv's thread, and one mechanism in one
@@ -12,18 +21,25 @@ reads at 20 Hz -- immaterial next to decoding.
 from __future__ import annotations
 
 import logging
+import os
+import sys
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from ..models.media_time import FrameRate, MediaTime, Rounding
-from ..services.binaries import register_libmpv_search_path
+from ..services.binaries import libmpv_filename, register_libmpv_search_path
 
 log = logging.getLogger(__name__)
 
-# Import mpv only after the bundled DLL directory is registered: python-mpv
-# resolves libmpv-2.dll at import time via ctypes.
+# Only Windows lets mpv adopt a foreign window. Everywhere else the picture goes
+# through the render API into a GL widget. See the module docstring.
+EMBEDS_BY_WINDOW_ID = sys.platform == "win32"
+
+# Import mpv only after the bundled library directory is registered: python-mpv
+# resolves libmpv at import time via ctypes.
 _LIBMPV_REGISTERED = register_libmpv_search_path()
 
 try:
@@ -64,10 +80,20 @@ class PlaybackEngine(QObject):
     loaded = Signal(Path)
     end_reached = Signal()
     error = Signal(str)
+    # Render API only: mpv has a new frame (or a redraw is due). Emitted from
+    # mpv's thread; the GL widget's slot runs queued on the GUI thread.
+    render_update = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._mpv = None
+        self._render_ctx = None
+        # ctypes callbacks must outlive the C side's use of them, so they are
+        # held here rather than left to the garbage collector.
+        self._get_proc_address_fn = None
+        # Set for the duration of shutdown: taking the renderer away ends the
+        # current file with an error mpv is right about but nobody needs to see.
+        self._closing = False
         self._path: Path | None = None
         self._rate: FrameRate = FrameRate(Fraction(25, 1))  # replaced on load
         self._duration: MediaTime | None = None
@@ -91,25 +117,117 @@ class PlaybackEngine(QObject):
             return ""
         if not _LIBMPV_REGISTERED:
             return (
-                "libmpv-2.dll was not found in vendor/playback.\n"
+                f"{libmpv_filename()} was not found in vendor/playback.\n"
                 "Run: python tools/fetch_binaries.py"
             )
         return f"libmpv could not be loaded: {MPV_IMPORT_ERROR}"
 
+    @property
+    def uses_render_api(self) -> bool:
+        return not EMBEDS_BY_WINDOW_ID
+
     def attach(self, window_id: int) -> bool:
-        """Create the mpv instance rendering into `window_id`.
+        """Create the mpv instance rendering into `window_id` (Windows).
 
         The handle must already exist -- call after the container widget has a
         native window.
         """
         if not MPV_AVAILABLE or self._mpv is not None:
             return self._mpv is not None
+        if not self._create(wid=str(int(window_id)), vo="gpu"):
+            return False
+        log.info("mpv attached to window id %s", window_id)
+        return True
 
+    def attach_render(self, get_proc_address: Callable[[bytes], int]) -> bool:
+        """Create the mpv instance drawing through the render API (macOS, Linux).
+
+        `get_proc_address` resolves an OpenGL function name to its address in
+        the *current* GL context, so this must be called with the GL widget's
+        context current -- from its initializeGL, in practice. Frames are then
+        drawn by `render()` from the widget's paintGL.
+        """
+        if not MPV_AVAILABLE or self._mpv is not None:
+            return self._mpv is not None
+        # Software decoding, deliberately. Hardware decoding through the
+        # render API means a GL interop with the host context, which is the
+        # one part of this path that cannot be tested without the real GPU:
+        # VideoToolbox on a Mac has not been tried, and the VA-API probe under
+        # Mesa was seen to leave a black picture in headless testing. Delivery
+        # spots are short and 1080p-ish; software decode is well within budget
+        # for them. Try hwdec="auto-safe" here once it has been seen working
+        # on a real Mac.
+        options = {"vo": "libmpv", "hwdec": "no"}
+        # Escape hatch: mpv's single-pass renderer, no intermediate
+        # framebuffers. Under Mesa's software GL the full renderer produced a
+        # black picture about half the time in headless testing while this
+        # mode never did; a real GPU is not expected to need it. If a Mac
+        # shows a black player, this is the first thing to try:
+        #     FRAMECHECK_GPU_DUMB_MODE=1 open -a Framecheck
+        # (tools/check_playback.py exercises both.)
+        if os.environ.get("FRAMECHECK_GPU_DUMB_MODE", "").strip() not in ("", "0"):
+            options["gpu_dumb_mode"] = "yes"
+        if not self._create(**options):
+            return False
+
+        def _resolve(_ctx, name: bytes) -> int:
+            try:
+                return int(get_proc_address(name) or 0)
+            except Exception:  # never let an exception cross into C
+                log.debug("get_proc_address failed for %r", name, exc_info=True)
+                return 0
+
+        self._get_proc_address_fn = _mpv_module.MpvGlGetProcAddressFn(_resolve)
+        try:
+            self._render_ctx = _mpv_module.MpvRenderContext(
+                self._mpv,
+                "opengl",
+                opengl_init_params={"get_proc_address": self._get_proc_address_fn},
+            )
+            self._render_ctx.update_cb = self.render_update.emit
+        except Exception as exc:
+            log.exception("failed to create the mpv render context")
+            self._render_ctx = None
+            self._mpv.terminate()
+            self._mpv = None
+            self.error.emit(f"Could not start the video renderer: {exc}")
+            return False
+        log.info("mpv attached through the OpenGL render API")
+        return True
+
+    def render(self, fbo: int, width: int, height: int) -> None:
+        """Draw the current frame into `fbo` (device pixels). GL context current."""
+        if self._render_ctx is None or width <= 0 or height <= 0:
+            return
+        try:
+            # mpv treats the update flag as consumed by a render; asking first
+            # keeps its frame queue moving even when Qt repaints for its own
+            # reasons (resize, expose).
+            self._render_ctx.update()
+            self._render_ctx.render(
+                flip_y=True, opengl_fbo={"w": int(width), "h": int(height), "fbo": int(fbo)}
+            )
+        except Exception:
+            log.debug("mpv render failed", exc_info=True)
+
+    def release_render_context(self) -> None:
+        """Free the render context. Must run with the GL context current, and
+        before that context is destroyed -- mpv releases its GL objects here."""
+        if self._render_ctx is None:
+            return
+        try:
+            self._render_ctx.update_cb = None
+            self._render_ctx.free()
+        except Exception:  # pragma: no cover - teardown best effort
+            log.exception("error freeing the mpv render context")
+        self._render_ctx = None
+        log.info("mpv render context released")
+
+    def _create(self, **options) -> bool:
+        options.setdefault("hwdec", "auto-safe")
         try:
             self._mpv = _mpv_module.MPV(
-                wid=str(int(window_id)),
-                vo="gpu",
-                hwdec="auto-safe",
+                **options,
                 # Keep the last frame on screen at EOF instead of tearing down
                 # the render window, which would flash the container.
                 keep_open="yes",
@@ -142,12 +260,17 @@ class PlaybackEngine(QObject):
             self._handle_end_file(event)
 
         self._timer.start()
-        log.info("mpv attached to window id %s", window_id)
         return True
 
     def shutdown(self) -> None:
-        """Terminate mpv before Qt destroys the window it renders into."""
+        """Terminate mpv before Qt destroys the window or GL context it draws into.
+
+        With the render API, call this with the GL widget's context current:
+        mpv gives its GL objects back here.
+        """
         self._timer.stop()
+        self._closing = True
+        self.release_render_context()
         if self._mpv is not None:
             try:
                 self._mpv.terminate()
@@ -334,6 +457,8 @@ class PlaybackEngine(QObject):
 
     def _handle_end_file(self, event) -> None:
         """Called on mpv's thread; Qt queues the emitted signals for the UI."""
+        if self._closing:
+            return
         data = getattr(event, "data", None)
         reason = getattr(data, "reason", None)
         reason_text = getattr(reason, "value", reason)

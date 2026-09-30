@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -25,13 +26,23 @@ _RESERVED_NAMES = frozenset(
 
 
 def app_data_dir() -> Path:
-    """Per-user data folder, %LOCALAPPDATA%\\Framecheck. Not created here.
+    """Per-user data folder. Not created here.
+
+    Windows: %LOCALAPPDATA%\\Framecheck. macOS: ~/Library/Application
+    Support/Framecheck. Elsewhere: $XDG_DATA_HOME/Framecheck. Setting
+    LOCALAPPDATA overrides all three, which is how the tests isolate it.
 
     Outside the install folder on purpose: an upgrade replaces the install
     folder's contents, and nothing a user made may live there.
     """
     base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) if base else Path.home() / ".local" / "share"
+    if base:
+        root = Path(base)
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        root = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return root / "Framecheck"
 
 

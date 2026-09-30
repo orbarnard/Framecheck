@@ -292,3 +292,39 @@ def test_shorten_path_stays_within_the_limit(max_length: int) -> None:
 def test_shorten_path_accepts_a_path_object() -> None:
     path = Path(r"C:\media\clip.mp4")
     assert shorten_path(path) == str(path)
+
+
+# --------------------------------------------------------------------------
+# app_data_dir
+# --------------------------------------------------------------------------
+
+
+def test_app_data_dir_honours_localappdata_everywhere(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from framecheck.app.utils import paths
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    for platform in ("win32", "darwin", "linux"):
+        monkeypatch.setattr(paths.sys, "platform", platform)
+        assert paths.app_data_dir() == tmp_path / "Framecheck"
+
+
+def test_app_data_dir_on_macos_is_application_support(monkeypatch: pytest.MonkeyPatch) -> None:
+    from framecheck.app.utils import paths
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    expected = Path.home() / "Library" / "Application Support" / "Framecheck"
+    assert paths.app_data_dir() == expected
+
+
+def test_app_data_dir_elsewhere_follows_xdg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from framecheck.app.utils import paths
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    assert paths.app_data_dir() == tmp_path / "Framecheck"
+    monkeypatch.delenv("XDG_DATA_HOME")
+    assert paths.app_data_dir() == Path.home() / ".local" / "share" / "Framecheck"

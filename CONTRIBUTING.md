@@ -5,20 +5,28 @@ agree your changes are licensed under the same terms.
 
 ## Development setup
 
-Windows, Python 3.11 or newer.
+Windows or macOS, Python 3.11 or newer.
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\activate            # macOS: source .venv/bin/activate
 pip install -e ".[dev]"
-python tools/fetch_binaries.py
+python tools/fetch_binaries.py     # macOS: brew install mpv first
 python -m framecheck.app.main
 ```
 
-`tools/fetch_binaries.py` downloads FFmpeg, ffprobe and libmpv into `vendor/`
-(not committed) and records what it fetched in `vendor/PROVENANCE.json`. If you
-change how a binary is obtained, update that script and
-`THIRD_PARTY_NOTICES.md` in the same pull request.
+`tools/fetch_binaries.py` puts FFmpeg, ffprobe and libmpv into `vendor/` (not
+committed) and records what it fetched in `vendor/PROVENANCE.json`: downloads
+on Windows, copies from Homebrew on macOS. If you change how a binary is
+obtained, update that script and `THIRD_PARTY_NOTICES.md` in the same pull
+request.
+
+Anything platform-specific lives behind `sys.platform` checks in
+`framecheck/app/services/binaries.py` (finding the binaries),
+`framecheck/app/utils/paths.py` (per-user folders), `framecheck/app/media/playback.py`
+(window-handle embedding on Windows, the OpenGL render API elsewhere) and the
+window chrome in `framecheck/app/ui/`. `python tools/check_playback.py` proves
+the render path draws a picture; run it after touching playback.
 
 ## Tests
 

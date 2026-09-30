@@ -1,32 +1,45 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for Framecheck.
+"""PyInstaller spec for Framecheck. One recipe, two platforms.
+
+Windows produces dist/Framecheck/ (Framecheck.exe with everything beside it);
+macOS produces dist/Framecheck.app on top of that. Where the two differ, the
+difference is marked below.
 
 onedir, not onefile. That is a licensing requirement, not a preference: the
 bundled Qt libraries are LGPL-3.0, which obliges us to let a recipient replace
-them and relink. In onedir they are ordinary .dll files in the distribution
-folder that can be swapped in place; in onefile they are opaque blobs inside the
-executable. See THIRD_PARTY_NOTICES.md.
+them and relink. In onedir they are ordinary library files in the distribution
+folder (or in Contents/Frameworks of the .app) that can be swapped in place; in
+onefile they are opaque blobs inside the executable. See THIRD_PARTY_NOTICES.md.
 
 `contents_directory='.'` keeps the payload flat in dist/Framecheck rather than
 hiding it in `_internal`, so `sys._MEIPASS` is the distribution folder itself and
 `vendor/`, `specs/` and `assets/` resolve exactly as they do in a checkout. The
-Qt DLLs being visible at the top level is the point, not a side effect.
+Qt DLLs being visible at the top level is the point, not a side effect. (The
+.app bundle has its own fixed layout, Contents/Frameworks plus
+Contents/Resources cross-linked, and `sys._MEIPASS` is Contents/Frameworks.)
 
-Build with `python tools/build_exe.py`, not by invoking pyinstaller directly.
+Build with `python tools/build_exe.py` (Windows) or `python tools/build_mac.py`
+(macOS), not by invoking pyinstaller directly.
 """
 
+import os
 import re
+import sys
 from pathlib import Path
 
-from PyInstaller.utils.win32.versioninfo import (
-    FixedFileInfo,
-    StringFileInfo,
-    StringStruct,
-    StringTable,
-    VarFileInfo,
-    VarStruct,
-    VSVersionInfo,
-)
+WINDOWS = sys.platform == "win32"
+MACOS = sys.platform == "darwin"
+
+if WINDOWS:
+    from PyInstaller.utils.win32.versioninfo import (
+        FixedFileInfo,
+        StringFileInfo,
+        StringStruct,
+        StringTable,
+        VarFileInfo,
+        VarStruct,
+        VSVersionInfo,
+    )
 
 ROOT = Path(SPECPATH).parent
 # Read, not imported: the spec runs inside PyInstaller, not the app's environment.
@@ -46,18 +59,42 @@ ENTRY.write_text(
     encoding="utf-8",
 )
 
-# libmpv is a *data* file, never a binary. python-mpv loads it through ctypes at
-# import time after os.add_dll_directory(vendor/playback), so the DLL has to stay
-# a real file at that exact relative path. As a binary PyInstaller would rewrite
-# its location and the search-path registration would find nothing.
-datas = [
-    (str(ROOT / "vendor" / "ffmpeg" / "ffmpeg.exe"), "vendor/ffmpeg"),
-    (str(ROOT / "vendor" / "ffmpeg" / "ffprobe.exe"), "vendor/ffmpeg"),
-    (str(ROOT / "vendor" / "ffmpeg" / "FFMPEG_LICENSE"), "vendor/ffmpeg"),
-    (str(ROOT / "vendor" / "playback" / "libmpv-2.dll"), "vendor/playback"),
-    (str(ROOT / "vendor" / "PROVENANCE.json"), "vendor"),
+VENDOR = ROOT / "vendor"
+
+# Windows: libmpv is a *data* file, never a binary. python-mpv loads it through
+# ctypes at import time after os.add_dll_directory(vendor/playback), so the DLL
+# has to stay a real file at that exact relative path. As a binary PyInstaller
+# would rewrite its location and the search-path registration would find
+# nothing. The shinchiro DLL and the gyan.dev executables are static, so there
+# are no dependencies to collect anyway.
+#
+# macOS: the opposite. The Homebrew ffmpeg, ffprobe and libmpv.dylib each pull
+# in dozens of shared libraries by absolute /opt/homebrew path, so they go in
+# as *binaries*: PyInstaller walks those dependencies, collects every one into
+# the bundle, and rewrites the load paths to @rpath so the app is self-contained.
+# They keep their vendor/ paths inside the bundle; only the linkage changes.
+binaries = []
+if WINDOWS:
+    datas = [
+        (str(VENDOR / "ffmpeg" / "ffmpeg.exe"), "vendor/ffmpeg"),
+        (str(VENDOR / "ffmpeg" / "ffprobe.exe"), "vendor/ffmpeg"),
+        (str(VENDOR / "playback" / "libmpv-2.dll"), "vendor/playback"),
+    ]
+else:
+    binaries = [
+        (str(VENDOR / "ffmpeg" / "ffmpeg"), "vendor/ffmpeg"),
+        (str(VENDOR / "ffmpeg" / "ffprobe"), "vendor/ffmpeg"),
+        (str(VENDOR / "playback" / "libmpv.dylib"), "vendor/playback"),
+    ]
+    datas = []
+datas += [
+    (str(p), "vendor/ffmpeg") for p in (VENDOR / "ffmpeg").glob("FFMPEG_*")
+]
+datas += [
+    (str(VENDOR / "PROVENANCE.json"), "vendor"),
     (str(ROOT / "specs"), "specs"),
     (str(ROOT / "assets" / "framecheck.ico"), "assets"),
+    (str(ROOT / "assets" / "framecheck.png"), "assets"),
     # A GPL binary distribution must carry its licence text and notices.
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
@@ -127,7 +164,7 @@ excludes = [
 a = Analysis(
     [str(ENTRY)],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=["mpv"],
     hookspath=[],
@@ -140,42 +177,55 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-version_info = VSVersionInfo(
-    ffi=FixedFileInfo(
-        filevers=VERSION_TUPLE,
-        prodvers=VERSION_TUPLE,
-        mask=0x3F,
-        flags=0x0,
-        OS=0x40004,
-        fileType=0x1,
-        subtype=0x0,
-        date=(0, 0),
-    ),
-    kids=[
-        StringFileInfo(
-            [
-                StringTable(
-                    "040904B0",
-                    [
-                        StringStruct("CompanyName", "Framecheck"),
-                        StringStruct("FileDescription", "Video, to spec."),
-                        StringStruct("FileVersion", VERSION),
-                        StringStruct("InternalName", "Framecheck"),
-                        StringStruct("OriginalFilename", "Framecheck.exe"),
-                        StringStruct("ProductName", "Framecheck"),
-                        StringStruct("ProductVersion", VERSION),
-                        StringStruct(
-                            "LegalCopyright",
-                            "Licensed under the GNU General Public License v3.0 "
-                            "or later (GPL-3.0-or-later). See LICENSE.",
-                        ),
-                    ],
-                )
-            ]
+def windows_version_info():
+    """The VERSIONINFO resource Explorer shows in the exe's Properties."""
+    return VSVersionInfo(
+        ffi=FixedFileInfo(
+            filevers=VERSION_TUPLE,
+            prodvers=VERSION_TUPLE,
+            mask=0x3F,
+            flags=0x0,
+            OS=0x40004,
+            fileType=0x1,
+            subtype=0x0,
+            date=(0, 0),
         ),
-        VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),
-    ],
-)
+        kids=[
+            StringFileInfo(
+                [
+                    StringTable(
+                        "040904B0",
+                        [
+                            StringStruct("CompanyName", "Framecheck"),
+                            StringStruct("FileDescription", "Video, to spec."),
+                            StringStruct("FileVersion", VERSION),
+                            StringStruct("InternalName", "Framecheck"),
+                            StringStruct("OriginalFilename", "Framecheck.exe"),
+                            StringStruct("ProductName", "Framecheck"),
+                            StringStruct("ProductVersion", VERSION),
+                            StringStruct(
+                                "LegalCopyright",
+                                "Licensed under the GNU General Public License v3.0 "
+                                "or later (GPL-3.0-or-later). See LICENSE.",
+                            ),
+                        ],
+                    )
+                ]
+            ),
+            VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),
+        ],
+    )
+
+
+version_info = windows_version_info() if WINDOWS else None
+
+# macOS code signing. Unset: PyInstaller ad-hoc signs, which runs locally but
+# is refused by Gatekeeper on other machines until the user opens it by hand.
+# Set to a "Developer ID Application" identity (tools/build_mac.py --sign), the
+# bundle is signed with the hardened runtime and the entitlements a Python app
+# needs, which is what notarisation requires.
+CODESIGN_IDENTITY = os.environ.get("FRAMECHECK_CODESIGN_IDENTITY") or None
+ENTITLEMENTS = str(ROOT / "build" / "entitlements.plist") if CODESIGN_IDENTITY else None
 
 exe = EXE(
     pyz,
@@ -190,10 +240,12 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
+    # The host architecture: the Homebrew libraries are single-arch, so an
+    # Apple Silicon build and an Intel build are two separate builds.
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(ROOT / "assets" / "framecheck.ico"),
+    codesign_identity=CODESIGN_IDENTITY,
+    entitlements_file=ENTITLEMENTS,
+    icon=str(ROOT / "assets" / ("framecheck.icns" if MACOS else "framecheck.ico")),
     version=version_info,
     # "." disables PyInstaller's `_internal` subdirectory, so sys._MEIPASS is the
     # distribution folder itself and vendor/, specs/ and assets/ sit where
@@ -210,3 +262,40 @@ coll = COLLECT(
     upx_exclude=[],
     name="Framecheck",
 )
+
+if MACOS:
+    app = BUNDLE(
+        coll,
+        name="Framecheck.app",
+        icon=str(ROOT / "assets" / "framecheck.icns"),
+        bundle_identifier="app.framecheck.Framecheck",
+        version=VERSION,
+        info_plist={
+            "CFBundleName": "Framecheck",
+            "CFBundleDisplayName": "Framecheck",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+            "NSHumanReadableCopyright": (
+                "Licensed under the GNU General Public License v3.0 or later "
+                "(GPL-3.0-or-later). See LICENSE."
+            ),
+            "LSApplicationCategoryType": "public.app-category.video",
+            # Without this the whole UI is rendered at 1x and upscaled on a
+            # Retina display.
+            "NSHighResolutionCapable": True,
+            # Qt's dark stylesheet is the whole look; a light system appearance
+            # must not leak into native controls (menus, dialogs stay native).
+            "NSRequiresAquaSystemAppearance": False,
+            # Media files are read with ffprobe and libmpv, never through a
+            # macOS media framework, but macOS still asks what the app can
+            # open before it offers it in Open With.
+            "CFBundleDocumentTypes": [
+                {
+                    "CFBundleTypeName": "Video",
+                    "CFBundleTypeRole": "Viewer",
+                    "LSHandlerRank": "Alternate",
+                    "LSItemContentTypes": ["public.movie"],
+                }
+            ],
+        },
+    )
